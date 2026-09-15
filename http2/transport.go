@@ -91,8 +91,21 @@ type Transport struct {
 	// uncompressed.
 	DisableCompression bool
 
-	HeaderPriority  *PriorityParam
-	HeaderTableSize uint32 // if nil, will use global initialHeaderTableSize
+	HeaderPriority *PriorityParam
+
+	// HPACKIndexingPolicy, when non-nil, decides per header field whether the request encoder adds
+	// it to the dynamic table and emits it with incremental indexing.
+	//
+	// [SIGHTGLASS PATCH] The default indexes everything that fits, which no browser does. Real
+	// Chrome never incrementally-indexes :path — the value changes every request, so indexing it
+	// evicts useful entries for nothing — and never indexes a literal :method, while it DOES index
+	// :authority, which is stable for the connection. The difference is on the wire in the
+	// representation octet, and again on the NEXT request, where an indexed field would come back as
+	// a dynamic index and an un-indexed one would not.
+	//
+	// nil preserves upstream behaviour exactly.
+	HPACKIndexingPolicy func(hpack.HeaderField) bool
+	HeaderTableSize     uint32 // if nil, will use global initialHeaderTableSize
 
 	// IdleConnTimeout is the maximum amount of time an idle (keep-alive)
 	// connection will remain idle before closing itself. Zero means no limit.
@@ -762,10 +775,10 @@ func (t *Transport) newClientConn(c net.Conn, addr string, singleUse bool) (*Cli
 		dialedAddr:            addr,
 		readerDone:            make(chan struct{}),
 		nextStreamID:          1,
-		maxFrameSize:          16 << 10,           // spec default
-		initialWindowSize:     65535,              // spec default
+		maxFrameSize:          16 << 10,                          // spec default
+		initialWindowSize:     65535,                             // spec default
 		maxConcurrentStreams:  ChromeInitialMaxConcurrentStreams, // [SIGHTGLASS PATCH 3] was 1000; Chrome uses kInitialMaxConcurrentStreams = 100 (chrome_concurrency.go)
-		peerMaxHeaderListSize: 0xffffffffffffffff, // "infinite", per spec. Use 2^64-1 instead.
+		peerMaxHeaderListSize: 0xffffffffffffffff,                // "infinite", per spec. Use 2^64-1 instead.
 		streams:               make(map[uint32]*clientStream),
 		singleUse:             singleUse,
 		wantSettingsAck:       true,
@@ -832,6 +845,12 @@ func (t *Transport) newClientConn(c net.Conn, addr string, singleUse bool) (*Cli
 	cc.fr.MaxHeaderListSize = t.maxHeaderListSize()
 
 	cc.henc = hpack.NewEncoder(&cc.hbuf)
+	// [SIGHTGLASS PATCH] Install the transport's indexing policy on this connection's request
+	// encoder. Set once at construction: HPACK is stateful, so a policy that changed mid-connection
+	// would desynchronise our dynamic table from the peer's view of it.
+	if t.HPACKIndexingPolicy != nil {
+		cc.henc.SetIndexingPolicy(t.HPACKIndexingPolicy)
+	}
 	// The encoder starts at the HPACK protocol-default dynamic table size
 	// (4096). We only ever shrink it in response to a peer SETTINGS frame
 	// advertising a smaller SETTINGS_HEADER_TABLE_SIZE (see processSettings);

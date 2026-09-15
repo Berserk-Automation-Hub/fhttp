@@ -421,3 +421,46 @@ REGRESSIONS: none
 root package: 7.993s   (was a 300s timeout before patch 4b)
 gofmt: identical to upstream's baseline
 ```
+
+---
+
+## Patch: HPACK pseudo-header indexing, so the encoder emits what a browser emits
+
+Found by a Sightglass parity guard built from decrypted Chrome 153 traffic. Two facets land on the
+same octet, and both are wire-visible to anything that decodes HPACK.
+
+**1. The static table's name index resolved to the LAST matching entry.** `addEntry` writes
+`byName[name]` unconditionally, so a name appearing twice keeps the higher index: `:path` → 5
+(`/index.html`) instead of 4 (`/`), `:method` → 3 (POST) instead of 2 (GET). Invisible on a
+name+value hit, but emitted verbatim in every literal-with-indexed-name representation.
+
+RFC 7541 §6.2.1 permits matching *any* entry with that name, so this was always an implementation
+choice — upstream's own test comment says exactly that ("This is allowed to match any `:method`
+entry. The current implementation uses the last entry added"). Real Chrome 153 uses the first, on
+114 `:path` and 8 `:method` observations across two captures with zero exceptions. Only the STATIC
+table is rebuilt; the dynamic table keeps most-recent-wins, because its indices shift on eviction.
+
+**2. The encoder indexed everything that fit.** Chrome never incrementally-indexes `:path` — the
+value changes every request, so indexing it evicts useful entries for nothing — and never indexes a
+literal `:method`, while it *does* index `:authority`, which is stable for the connection.
+`Encoder.SetIndexingPolicy` adds a per-field hook; `nil` is upstream behaviour exactly.
+`Transport.HPACKIndexingPolicy` carries it, installed once per connection because HPACK is stateful
+and a mid-connection change would desynchronise our table from the peer's view of it.
+
+`Sensitive` is deliberately NOT the mechanism: it emits "Never Indexed" (`0x1x`), which carries an
+explicit do-not-proxy instruction and which Chrome uses **zero** times in 2513 observed fields. It
+would fix one octet and break another.
+
+### Result
+
+```
+:path "/x"   upstream default            -> 0x44
+             with Chrome's policy        -> 0x04     (what Chrome emits)
+```
+
+### Verification
+
+Regression diff against pristine v0.6.9, run identically: **34 failing / 34 failing, no
+regressions.** One upstream test was updated rather than deleted — `TestEncoderSearchTable` pinned
+the last-match choice, and its own comment documented it as free. The new expectation records why it
+changed.

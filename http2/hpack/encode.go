@@ -14,6 +14,10 @@ const (
 )
 
 type Encoder struct {
+	// indexingPolicy, when non-nil, decides per field whether to incrementally index it. See
+	// SetIndexingPolicy. nil means upstream behaviour.
+	indexingPolicy func(HeaderField) bool
+
 	dynTab dynamicTable
 	// minSize is the minimum table size set by
 	// SetMaxDynamicTableSize after the previous Header Table Size
@@ -131,9 +135,35 @@ func (e *Encoder) SetMaxDynamicTableSizeLimit(v uint32) {
 	}
 }
 
+// SetIndexingPolicy installs a per-field decision on whether to add a header to the dynamic table
+// and emit it with incremental indexing.
+//
+// [SIGHTGLASS PATCH] Upstream indexes everything that is not Sensitive and fits, which is a
+// reasonable default and is NOT what a browser does. Real Chrome 153 never incrementally-indexes
+// :path — the value changes on every request, so indexing it would evict useful entries and grow the
+// table for nothing — and never indexes a literal :method. It DOES index :authority, which is stable
+// for the life of the connection. That asymmetry is visible to anything that decodes HPACK: the
+// representation octet differs, and the un-indexed field never reappears as a dynamic index on a
+// later request.
+//
+// Sensitive is deliberately NOT the mechanism for this. Sensitive emits "Never Indexed" (0x1x),
+// which carries an explicit do-not-proxy instruction and which Chrome uses zero times in 2513
+// observed fields; using it to mean "do not index" would fix one octet and break another.
+//
+// policy == nil restores upstream behaviour exactly.
+func (e *Encoder) SetIndexingPolicy(policy func(HeaderField) bool) {
+	e.indexingPolicy = policy
+}
+
 // shouldIndex reports whether f should be indexed.
 func (e *Encoder) shouldIndex(f HeaderField) bool {
-	return !f.Sensitive && f.Size() <= e.dynTab.maxSize
+	if f.Sensitive || f.Size() > e.dynTab.maxSize {
+		return false
+	}
+	if e.indexingPolicy != nil {
+		return e.indexingPolicy(f)
+	}
+	return true
 }
 
 // appendIndexed appends index i, as encoded in "Indexed Header Field"

@@ -197,6 +197,27 @@ func newStaticTable() *headerFieldTable {
 	for _, e := range staticTableEntries[:] {
 		t.addEntry(e)
 	}
+	// [SIGHTGLASS PATCH] The STATIC table's name index resolves to the FIRST entry with a given
+	// name, not the last.
+	//
+	// addEntry writes byName[name] unconditionally, so for a name that appears more than once the
+	// highest index wins: ":path" resolves to 5 (`/index.html`) rather than 4 (`/`), and ":method"
+	// to 3 (POST) rather than 2 (GET). That choice is invisible for a name+value hit, but it is on
+	// the wire for every literal-with-indexed-name: the encoder emits the index it was given.
+	//
+	// Real Chrome 153 uses the first: it emits :path with name index 4 and a literal :method with
+	// name index 2, on 114 :path and 8 :method observations across both captures, with zero
+	// exceptions. Measured, not assumed.
+	//
+	// Only the static table is rebuilt. The DYNAMIC table must keep most-recent-wins, because its
+	// indices shift as entries are evicted and the newest entry is the one an encoder can rely on.
+	first := make(map[string]uint64, len(t.byName))
+	for k := len(t.ents) - 1; k >= 0; k-- {
+		first[t.ents[k].Name] = uint64(k) + 1
+	}
+	for name, idx := range first {
+		t.byName[name] = idx
+	}
 	return t
 }
 

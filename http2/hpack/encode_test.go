@@ -107,16 +107,20 @@ func TestEncoderSearchTable(t *testing.T) {
 		{pair("blake", "miz"), uint64(staticTable.len()) + 2, true},
 		{pair(":method", "GET"), 2, true},
 
-		// Only name match because Sensitive == true. This is allowed to match
-		// any ":method" entry. The current implementation uses the last entry
-		// added in newStaticTable.
-		{HeaderField{":method", "GET", true}, 3, false},
+		// Only name match because Sensitive == true. RFC 7541 6.2.1 allows this to match ANY
+		// ":method" entry, which is why the expectation here is an implementation choice rather than
+		// a requirement — upstream's own comment said as much.
+		// [SIGHTGLASS PATCH] newStaticTable now indexes names to their FIRST entry, not their last,
+		// because that is what real Chrome emits on the wire (:method name index 2, :path 4;
+		// measured over 114 :path and 8 :method observations with zero exceptions). The index is
+		// visible in every literal-with-indexed-name representation.
+		{HeaderField{":method", "GET", true}, 2, false},
 
 		// Only Name matches
 		{pair("foo", "..."), uint64(staticTable.len()) + 3, false},
 		{pair("blake", "..."), uint64(staticTable.len()) + 2, false},
-		// As before, this is allowed to match any ":method" entry.
-		{pair(":method", "..."), 3, false},
+		// As before, this is allowed to match any ":method" entry; first-match is now the choice.
+		{pair(":method", "..."), 2, false},
 
 		// None match
 		{pair("foo-", "bar"), 0, false},
