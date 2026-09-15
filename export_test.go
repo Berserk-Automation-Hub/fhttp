@@ -311,3 +311,11 @@ func ExportCloseTransportConnsAbruptly(tr *Transport) {
 	}
 	tr.idleMu.Unlock()
 }
+
+func SetTestHookProxyConnectTimeout(t *testing.T, f func(context.Context, time.Duration) (context.Context, context.CancelFunc)) {
+	orig := testHookProxyConnectTimeout
+	t.Cleanup(func() {
+		testHookProxyConnectTimeout = orig
+	})
+	testHookProxyConnectTimeout = f
+}

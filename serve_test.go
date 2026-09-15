@@ -35,13 +35,13 @@ import (
 	"testing"
 	"time"
 
-	tls "github.com/bogdanfinn/utls"
+	tls "github.com/Berserk-Automation-Hub/utls"
 
-	. "github.com/bogdanfinn/fhttp"
-	"github.com/bogdanfinn/fhttp/httptest"
-	"github.com/bogdanfinn/fhttp/httputil"
-	"github.com/bogdanfinn/fhttp/internal"
-	"github.com/bogdanfinn/fhttp/internal/testenv"
+	. "github.com/Berserk-Automation-Hub/fhttp"
+	"github.com/Berserk-Automation-Hub/fhttp/httptest"
+	"github.com/Berserk-Automation-Hub/fhttp/httputil"
+	"github.com/Berserk-Automation-Hub/fhttp/internal"
+	"github.com/Berserk-Automation-Hub/fhttp/internal/testenv"
 )
 
 type dummyAddr string

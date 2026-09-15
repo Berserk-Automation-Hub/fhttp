@@ -27,10 +27,10 @@ import (
 	"testing"
 	"time"
 
-	tls "github.com/bogdanfinn/utls"
+	tls "github.com/Berserk-Automation-Hub/utls"
 
-	http "github.com/bogdanfinn/fhttp"
-	"github.com/bogdanfinn/fhttp/httptest"
+	http "github.com/Berserk-Automation-Hub/fhttp"
+	"github.com/Berserk-Automation-Hub/fhttp/httptest"
 
 	"golang.org/x/net/http2/hpack"
 )
@@ -1864,7 +1864,7 @@ func TestServerRejectsContentLengthWithSignNewRequests(t *testing.T) {
 			}
 			checkReq := func(r *http.Request) {
 				if r.ContentLength != tt.wantCL {
-					t.Fatalf("Got: %q\nWant: %q", r.ContentLength, tt.wantCL)
+					t.Fatalf("Got: %d\nWant: %d", r.ContentLength, tt.wantCL)
 				}
 			}
 			testServerRequest(t, writeReq, checkReq)

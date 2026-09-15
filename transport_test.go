@@ -37,14 +37,14 @@ import (
 	"testing/iotest"
 	"time"
 
-	tls "github.com/bogdanfinn/utls"
+	tls "github.com/Berserk-Automation-Hub/utls"
 
-	. "github.com/bogdanfinn/fhttp"
-	"github.com/bogdanfinn/fhttp/httptest"
-	"github.com/bogdanfinn/fhttp/httptrace"
-	"github.com/bogdanfinn/fhttp/httputil"
-	"github.com/bogdanfinn/fhttp/internal"
-	"github.com/bogdanfinn/fhttp/internal/nettrace"
+	. "github.com/Berserk-Automation-Hub/fhttp"
+	"github.com/Berserk-Automation-Hub/fhttp/httptest"
+	"github.com/Berserk-Automation-Hub/fhttp/httptrace"
+	"github.com/Berserk-Automation-Hub/fhttp/httputil"
+	"github.com/Berserk-Automation-Hub/fhttp/internal"
+	"github.com/Berserk-Automation-Hub/fhttp/internal/nettrace"
 
 	"golang.org/x/net/http/httpguts"
 )
@@ -1472,11 +1472,24 @@ func TestTransportProxy(t *testing.T) {
 // Issue 28012: verify that the Transport closes its TCP connection to http proxies
 // when they're slow to reply to HTTPS CONNECT responses.
 func TestTransportProxyHTTPSConnectLeak(t *testing.T) {
-	setParallel(t)
-	defer afterTest(t)
+	// Upstream parity (net/http): request cancellation no longer reaches the proxy CONNECT,
+	// because the dial is deliberately detached from it (patch 4). The CONNECT is instead bounded
+	// by its own timeout (patch 4b), so this test drives THAT bound rather than cancelling the
+	// request — exactly as upstream Go rewrote it when it made the same change.
+	cancelc := make(chan struct{})
+	SetTestHookProxyConnectTimeout(t, func(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+		ctx, cancel := context.WithCancel(ctx)
+		go func() {
+			select {
+			case <-cancelc:
+			case <-ctx.Done():
+			}
+			cancel()
+		}()
+		return ctx, cancel
+	})
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	defer afterTest(t)
 
 	ln := newLocalListener(t)
 	defer ln.Close()
@@ -1501,10 +1514,9 @@ func TestTransportProxyHTTPSConnectLeak(t *testing.T) {
 			return
 		}
 
-		// Now hang and never write a response; instead, cancel the request and wait
-		// for the client to close.
-		// (Prior to Issue 28012 being fixed, we never closed.)
-		cancel()
+		// Now hang and never write a response; instead, trip the CONNECT timeout and wait
+		// for the client to close. (Prior to Issue 28012 being fixed, we never closed.)
+		close(cancelc)
 		var buf [1]byte
 		_, err = br.Read(buf[:])
 		if err != io.EOF {
@@ -1520,7 +1532,7 @@ func TestTransportProxyHTTPSConnectLeak(t *testing.T) {
 			},
 		},
 	}
-	req, err := NewRequestWithContext(ctx, "GET", "https://golang.fake.tld/", nil)
+	req, err := NewRequest("GET", "https://golang.fake.tld/", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3683,9 +3695,11 @@ func TestTransportDialTLS(t *testing.T) {
 func TestTransportDialContext(t *testing.T) {
 	setParallel(t)
 	defer afterTest(t)
+	ctxKey := "some-key"
+	ctxValue := "some-value"
 	var mu sync.Mutex // guards following
 	var gotReq bool
-	var receivedContext context.Context
+	var gotCtxValue any
 
 	ts := httptest.NewServer(HandlerFunc(func(w ResponseWriter, r *Request) {
 		mu.Lock()
@@ -3696,7 +3710,7 @@ func TestTransportDialContext(t *testing.T) {
 	c := ts.Client()
 	c.Transport.(*Transport).DialContext = func(ctx context.Context, netw, addr string) (net.Conn, error) {
 		mu.Lock()
-		receivedContext = ctx
+		gotCtxValue = ctx.Value(ctxKey)
 		mu.Unlock()
 		return net.Dial(netw, addr)
 	}
@@ -3705,7 +3719,7 @@ func TestTransportDialContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx := context.WithValue(context.Background(), "some-Key", "some-value")
+	ctx := context.WithValue(context.Background(), ctxKey, ctxValue)
 	res, err := c.Do(req.WithContext(ctx))
 	if err != nil {
 		t.Fatal(err)
@@ -3715,17 +3729,19 @@ func TestTransportDialContext(t *testing.T) {
 	if !gotReq {
 		t.Error("didn't get request")
 	}
-	if receivedContext != ctx {
-		t.Error("didn't receive correct context")
+	if got, want := gotCtxValue, ctxValue; got != want {
+		t.Errorf("got context with value %v, want %v", got, want)
 	}
 }
 
 func TestTransportDialTLSContext(t *testing.T) {
 	setParallel(t)
 	defer afterTest(t)
+	ctxKey := "some-key"
+	ctxValue := "some-value"
 	var mu sync.Mutex // guards following
 	var gotReq bool
-	var receivedContext context.Context
+	var gotCtxValue any
 
 	ts := httptest.NewTLSServer(HandlerFunc(func(w ResponseWriter, r *Request) {
 		mu.Lock()
@@ -3736,7 +3752,7 @@ func TestTransportDialTLSContext(t *testing.T) {
 	c := ts.Client()
 	c.Transport.(*Transport).DialTLSContext = func(ctx context.Context, netw, addr string) (net.Conn, error) {
 		mu.Lock()
-		receivedContext = ctx
+		gotCtxValue = ctx.Value(ctxKey)
 		mu.Unlock()
 		c, err := tls.Dial(netw, addr, c.Transport.(*Transport).TLSClientConfig)
 		if err != nil {
@@ -3749,7 +3765,7 @@ func TestTransportDialTLSContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx := context.WithValue(context.Background(), "some-Key", "some-value")
+	ctx := context.WithValue(context.Background(), ctxKey, ctxValue)
 	res, err := c.Do(req.WithContext(ctx))
 	if err != nil {
 		t.Fatal(err)
@@ -3759,8 +3775,8 @@ func TestTransportDialTLSContext(t *testing.T) {
 	if !gotReq {
 		t.Error("didn't get request")
 	}
-	if receivedContext != ctx {
-		t.Error("didn't receive correct context")
+	if got, want := gotCtxValue, ctxValue; got != want {
+		t.Errorf("got context with value %v, want %v", got, want)
 	}
 }
 

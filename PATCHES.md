@@ -344,3 +344,80 @@ patch 2, three for patch 3, three for patch 4, two for patch 5), keep `http2/pri
 `http2/chrome_concurrency.go`, and re-run
 `go test ./parity/ -run 'TestParityHTTP2|TestParityNoAbandonedH1Dials|TestParityH2DialHonoursRequestContext'`
 (all of it, not just the new guards).
+
+
+---
+
+## Patch 4b — bound the proxy CONNECT unconditionally (and the tests patch 4 invalidated)
+
+**Found by restoring upstream's test suite**, which the vendored copy had stripped.
+`TestTransportProxyHTTPSConnectLeak` hung for the full 5-minute test timeout.
+
+**The bug patch 4 introduced.** This tree carried Go's OLD CONNECT logic:
+
+```go
+connectCtx := ctx
+if ctx.Done() == nil {            // only when the caller's ctx can NEVER be cancelled
+    newCtx, cancel := context.WithTimeout(ctx, 1*time.Minute)
+    connectCtx = newCtx
+}
+```
+
+i.e. the 1-minute leak bound applied *only* when the context had no `Done` channel, and request
+cancellation was relied on in every other case. Patch 4 detaches the dial from request cancellation,
+so the context arriving here always HAS a `Done` channel (it comes from `context.WithCancel`) but is
+never cancelled by the request finishing. **The condition was therefore false in exactly the case the
+safety net existed for**: a proxy that accepts the TCP connect and then never answers leaked the
+goroutine and the socket indefinitely.
+
+**The fix** is upstream Go's, verbatim in shape — make the bound unconditional:
+
+```go
+connectCtx, cancel := testHookProxyConnectTimeout(ctx, 1*time.Minute)
+defer cancel()
+```
+
+`net/http/transport.go` does exactly this, with the comment *"Set a (long) timeout here to make sure
+we don't block forever and leak a goroutine if the connection stops replying after the TCP connect."*
+Upstream's leak protection for CONNECT deliberately does not depend on request cancellation — which is
+what makes detaching the dial safe there, and was the missing half here.
+
+`SetTestHookProxyConnectTimeout` is added to `export_test.go` (upstream shape) so the test can drive
+that bound directly instead of waiting a real minute.
+
+### Tests patch 4 invalidated, refreshed to their current upstream versions
+
+This fork's tests predate the upstream change that introduced `context.WithoutCancel` for the dial,
+so three of them still asserted the pre-change contract. Upstream rewrote all three at the time;
+these now match:
+
+| test | asserted before | asserts now (upstream) |
+|---|---|---|
+| `TestTransportDialContext` | `receivedContext != ctx` — context **identity** | `ctx.Value(ctxKey)` — the context's **value**, which `WithoutCancel` preserves |
+| `TestTransportDialTLSContext` | same | same |
+| `TestClientPropagatesTimeoutToContext` | a deadline inside `DialContext` | a deadline on `req.Context()`, via a `testRoundTripper` |
+| `TestTransportProxyHTTPSConnectLeak` | cancelling the request aborts the CONNECT | the CONNECT's own timeout aborts it |
+
+No assertion was weakened: each still proves the property upstream intends, against the behaviour
+upstream now specifies.
+
+### Two unrelated drift fixes, needed to run the suite at all on a current toolchain
+
+* `http2/server_test.go` formatted an `int64` with `%q`. Harmless at runtime, but `go test` runs vet
+  and the newer vet rejects it, so the whole `http2` package reported `[build failed]` before running
+  a single test. Now `%d`.
+* `pprof/pprof.go` did not know Go 1.27's `goroutineleak` profile, so `TestDescriptions` failed. Added
+  to both `profileSupportsDelta` and `profileDescriptions`, matching upstream.
+
+### Verification
+
+Baseline matters here: **pristine upstream v0.6.9 already fails 34 tests** under `go test -short`, so
+"green" is not an available bar. The bar is a regression diff — run pristine and fork identically and
+count only what fails in the fork and not in pristine:
+
+```
+fork: 34 failing   pristine: 34 failing
+REGRESSIONS: none
+root package: 7.993s   (was a 300s timeout before patch 4b)
+gofmt: identical to upstream's baseline
+```

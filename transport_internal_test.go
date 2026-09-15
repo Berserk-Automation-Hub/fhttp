@@ -17,10 +17,10 @@ import (
 	"sync"
 	"testing"
 
-	tls "github.com/bogdanfinn/utls"
+	tls "github.com/Berserk-Automation-Hub/utls"
 	"github.com/klauspost/compress/gzip"
 
-	"github.com/bogdanfinn/fhttp/internal"
+	"github.com/Berserk-Automation-Hub/fhttp/internal"
 )
 
 // Issue 15446: incorrect wrapping of errors when server closes an idle connection.

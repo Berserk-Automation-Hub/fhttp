@@ -34,9 +34,9 @@ import (
 	"github.com/andybalholm/brotli"
 	"github.com/klauspost/compress/zstd"
 
-	tls "github.com/bogdanfinn/utls"
+	tls "github.com/Berserk-Automation-Hub/utls"
 
-	"github.com/bogdanfinn/fhttp/httptrace"
+	"github.com/Berserk-Automation-Hub/fhttp/httptrace"
 
 	"golang.org/x/net/http/httpguts"
 	"golang.org/x/net/http/httpproxy"
@@ -1571,6 +1571,9 @@ func (pconn *persistConn) addTLS(name string, trace *httptrace.ClientTrace) erro
 	return nil
 }
 
+// testHookProxyConnectTimeout is context.WithTimeout, swappable by tests (upstream parity).
+var testHookProxyConnectTimeout = context.WithTimeout
+
 type erringRoundTripper interface {
 	RoundTripErr() error
 }
@@ -1691,17 +1694,19 @@ func (t *Transport) dialConn(ctx context.Context, cm connectMethod) (pconn *pers
 			Header: hdr,
 		}
 
-		// If there's no done channel (no deadline or cancellation
-		// from the caller possible), at least set some (long)
-		// timeout here. This will make sure we don't block forever
-		// and leak a goroutine if the connection stops replying
-		// after the TCP connect.
-		connectCtx := ctx
-		if ctx.Done() == nil {
-			newCtx, cancel := context.WithTimeout(ctx, 1*time.Minute)
-			defer cancel()
-			connectCtx = newCtx
-		}
+		// [SIGHTGLASS PATCH 4b] Bound the CONNECT UNCONDITIONALLY, as upstream Go does
+		// (net/http/transport.go: `connectCtx, cancel := testHookProxyConnectTimeout(ctx, 1*time.Minute)`).
+		//
+		// This file previously applied the (long) timeout only `if ctx.Done() == nil`, i.e. only
+		// when the caller's context could never be cancelled, and relied on request cancellation
+		// to bound the CONNECT in every other case. Patch 4 detaches the dial from the request's
+		// cancellation, so the context reaching here always HAS a Done channel (it comes from
+		// context.WithCancel) but is never cancelled by the request finishing — the old condition
+		// was therefore false exactly when the safety net was needed, and a proxy that accepts the
+		// TCP connect and then never answers leaked the goroutine and the socket forever.
+		// TestTransportProxyHTTPSConnectLeak caught it as a 5-minute hang.
+		connectCtx, cancel := testHookProxyConnectTimeout(ctx, 1*time.Minute)
+		defer cancel()
 
 		didReadResponse := make(chan struct{}) // closed after CONNECT write+read is done or fails
 		var (

@@ -34,7 +34,7 @@ package http2
 import (
 	"context"
 
-	http "github.com/bogdanfinn/fhttp"
+	http "github.com/Berserk-Automation-Hub/fhttp"
 )
 
 // perRequestPriorityKey is the unexported context key. Unexported so nothing outside this package
