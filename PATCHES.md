@@ -568,9 +568,12 @@ loses `priority` on HTTP/2 or invents it on HTTP/1.1.
 ```
 header.go        HTTP1OmitKey = "HTTP1-Omit:"; writeSubset drops the named headers, both on the
                  ordered path (SortedKeyValuesBy) and the unordered one (SortedKeyValues)
-http2/transport.go, h2_bundle.go
-                 the key is skipped by the HTTP/2 encoder and by the header-name validator, exactly
-                 as HeaderOrderKey and PHeaderOrderKey already are
+http2/transport.go, h2_bundle.go, transport.go
+                 the key is skipped by the HTTP/2 encoder and ALLOWED by both header-name
+                 validators, exactly as HeaderOrderKey and PHeaderOrderKey already are. The
+                 HTTP/1.1 one (transport.go) matters as much as the HTTP/2 one: a magic key ends
+                 in ':', which httpguts.ValidHeaderFieldName rejects, so without the allowance
+                 every HTTP/1.1 request carrying it fails before it is written
 ```
 
 Names match case-insensitively — HTTP/1.1 names are case-insensitive, and a library whose point is
