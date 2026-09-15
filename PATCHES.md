@@ -545,3 +545,49 @@ after:                        50 failing
 NEW failures: none
 FIXED:        TestCompressionDeflate   <- the raw-DEFLATE corruption, upstream's own test
 ```
+
+## Patch 8 — `HTTP1OmitKey`, for headers that belong on HTTP/2 but not on HTTP/1.1
+
+Some headers are protocol-scoped in a direction the existing machinery could not express.
+
+**Connection-specific fields go the easy way.** HTTP/2 already drops `Connection`, `Keep-Alive`,
+`Proxy-Connection`, `Transfer-Encoding` and `Upgrade` itself (RFC 9113 §8.2.2, `transport.go` in the
+`enumerateHeaders` skip list) and `checkConnHeaders` explicitly permits `Connection: keep-alive`. So
+a caller sets them unconditionally and only the HTTP/1.1 serializer writes them.
+
+**The other direction had no equivalent.** A header that belongs on HTTP/2 and HTTP/3 but *not* on
+HTTP/1.1 is written by the HTTP/1.1 serializer, and the caller cannot know which protocol will be
+negotiated: ALPN is decided at dial time and the request is built before that.
+
+The concrete case is RFC 9218's `priority`. Chrome sends it on **112 of 119** captured HTTP/2
+requests, as the last field, and on **0 of 744** captured HTTP/1.1 requests — 722 over TLS with
+forced ALPN plus 22 to a flag-free `http://localhost` origin. It has no HTTP/1.1 form at all.
+Without this key a request built once and sent over whichever protocol the origin offers either
+loses `priority` on HTTP/2 or invents it on HTTP/1.1.
+
+```
+header.go        HTTP1OmitKey = "HTTP1-Omit:"; writeSubset drops the named headers, both on the
+                 ordered path (SortedKeyValuesBy) and the unordered one (SortedKeyValues)
+http2/transport.go, h2_bundle.go
+                 the key is skipped by the HTTP/2 encoder and by the header-name validator, exactly
+                 as HeaderOrderKey and PHeaderOrderKey already are
+```
+
+Names match case-insensitively — HTTP/1.1 names are case-insensitive, and a library whose point is
+that the case on the wire is chosen deliberately must not make the caller guess which spelling to
+name here.
+
+### Tests
+
+`header_http1omit_test.go`: the header is written without the key and gone with it, on the wire
+bytes of `Request.Write`; the magic key itself never reaches the wire; nothing else is dropped;
+case-insensitive in both directions; and it works on the ordered path, which is the one a
+browser-emulating caller actually takes.
+
+### Verification
+
+```
+before (v0.6.9-sightglass.3): 50 failing
+after:                        49 failing
+NEW failures: none
+```

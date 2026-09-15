@@ -8391,7 +8391,6 @@ var (
 	http2errStopReqBodyWriteAndCancel = errors.New("http2: canceling request")
 )
 
-
 // frameScratchBufferLen returns the length of a buffer to use for
 // outgoing request bodies to read/write to/from.
 //
@@ -8630,7 +8629,7 @@ func (cc *http2ClientConn) encodeHeaders(req *Request, addGzipHeader bool, trail
 		if !httpguts.ValidHeaderFieldName(k) {
 			// If the header is magic key, the headers would have been ordered
 			// by this step. It is ok to delete and not raise an error
-			if k == HeaderOrderKey || k == PHeaderOrderKey {
+			if k == HeaderOrderKey || k == PHeaderOrderKey || k == HTTP1OmitKey {
 				continue
 			}
 

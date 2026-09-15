@@ -41,6 +41,26 @@ const HeaderOrderKey = "Header-Order:"
 // Valid fields are :authority, :method, :path, :scheme
 const PHeaderOrderKey = "PHeader-Order:"
 
+// HTTP1OmitKey is a magic Key whose values name headers to omit on HTTP/1.1 ONLY. They are written
+// normally on HTTP/2 and HTTP/3.
+//
+// It exists because some headers are protocol-scoped in a direction the existing machinery cannot
+// express. Connection-specific fields go the easy way — HTTP/2 already drops `Connection`,
+// `Keep-Alive`, `Proxy-Connection`, `Transfer-Encoding` and `Upgrade` itself (RFC 9113 §8.2.2), so a
+// caller can set them unconditionally and only HTTP/1.1 writes them. The other direction has no
+// equivalent: a header that belongs on HTTP/2 and HTTP/3 but NOT on HTTP/1.1 will be written by the
+// HTTP/1.1 serializer, and the caller cannot know which protocol the transport will negotiate,
+// because ALPN is decided at dial time and the request is built before that.
+//
+// The concrete case is RFC 9218's `priority`. Chrome sends it on 112 of 119 captured HTTP/2
+// requests, as the LAST field, and on 0 of 744 captured HTTP/1.1 requests — it has no HTTP/1.1 form
+// at all. Without this key, a request built once and sent over whichever protocol the origin offers
+// either loses it on HTTP/2 or invents it on HTTP/1.1.
+//
+// Values are matched case-insensitively. Like the other magic keys, this one is never written to the
+// wire and is skipped by the HTTP/2 and HTTP/3 encoders.
+const HTTP1OmitKey = "HTTP1-Omit:"
+
 // Add adds the Key, value pair to the header.
 // It appends to any existing Values associated with Key.
 // The Key is case insensitive; it is canonicalized by
@@ -299,13 +319,36 @@ func (h Header) writeSubset(w io.Writer, exclude map[string]bool, trace *httptra
 		// respExcludeHeader), so writing to exclude both raced with other
 		// writers and readers and leaked the exclusions into every later
 		// write that used the same map.
-		excl := make(map[string]bool, len(exclude)+2)
+		excl := make(map[string]bool, len(exclude)+3)
 		maps.Copy(excl, exclude)
 		excl[HeaderOrderKey] = true
 		excl[PHeaderOrderKey] = true
+		excl[HTTP1OmitKey] = true
+		// HTTP/1.1-only omissions. This is the HTTP/1.1 serializer, so anything named here is
+		// dropped; the HTTP/2 and HTTP/3 encoders never reach this function and write it normally.
+		for _, name := range h[HTTP1OmitKey] {
+			for k := range h {
+				if strings.EqualFold(k, name) {
+					excl[k] = true
+				}
+			}
+		}
 		kvs, sorter = h.SortedKeyValuesBy(order, excl)
 	} else {
-		kvs, sorter = h.SortedKeyValues(exclude)
+		excl := exclude
+		if omit, ok := h[HTTP1OmitKey]; ok {
+			excl = make(map[string]bool, len(exclude)+1)
+			maps.Copy(excl, exclude)
+			excl[HTTP1OmitKey] = true
+			for _, name := range omit {
+				for k := range h {
+					if strings.EqualFold(k, name) {
+						excl[k] = true
+					}
+				}
+			}
+		}
+		kvs, sorter = h.SortedKeyValues(excl)
 	}
 
 	var formattedVals []string
