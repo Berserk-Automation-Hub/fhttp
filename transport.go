@@ -3043,7 +3043,12 @@ func (z *zlibDeflateReader) Read(p []byte) (n int, err error) {
 	return z.zr.Read(p)
 }
 
+// Close tolerates never having been read: zr is constructed on the first Read, so a caller that
+// closes an untouched body would otherwise hit a nil-receiver panic.
 func (z *zlibDeflateReader) Close() error {
+	if z.zr == nil {
+		return z.body.Close()
+	}
 	return z.zr.Close()
 }
 
@@ -3064,7 +3069,11 @@ func (dr *deflateReader) Read(p []byte) (n int, err error) {
 	return dr.r.Read(p)
 }
 
+// Close tolerates never having been read; see zlibDeflateReader.Close.
 func (dr *deflateReader) Close() error {
+	if dr.r == nil {
+		return dr.body.Close()
+	}
 	return dr.r.Close()
 }
 
@@ -3107,31 +3116,106 @@ const (
 	zlibLevelBest     = 0xDA
 )
 
+// isZlibHeader applies RFC 1950 2.2's OWN test for a zlib stream header, rather than the list of
+// four common CMF/FLG pairs this file used to compare against.
+//
+// The list was both too narrow and too wide, and the narrow half was the visible bug. `deflate` is
+// famously two formats — RFC 1950 (zlib-wrapped) and RFC 1951 (raw), and browsers accept both —
+// but a raw DEFLATE stream begins with the first block's BFINAL/BTYPE bits, which are not 0x78 in
+// general. Every such body fell through to "pass the bytes through untouched", so the caller was
+// handed COMPRESSED bytes with Content-Encoding deleted and res.Uncompressed set to true: a corrupt
+// body presented as a decoded one. There is no longer a pass-through branch, because a body under
+// `Content-Encoding: deflate` is one of the two forms or it is broken, and a broken one should
+// surface as flate's own error rather than as silent corruption.
+//
+// The test itself is exact, not a heuristic: CM must be 8, CINFO at most 7, and the two octets read
+// as a big-endian 16-bit value must be a multiple of 31 (that is what FCHECK is for). A raw DEFLATE
+// stream satisfies all three only by coincidence, at roughly 1 in 31 for the checksum alone.
+func isZlibHeader(h [2]byte) bool {
+	cm, cinfo := h[0]&0x0f, h[0]>>4
+	return cm == 8 && cinfo <= 7 && (uint16(h[0])<<8|uint16(h[1]))%31 == 0
+}
+
+// identifyDeflate wraps a `Content-Encoding: deflate` body in a reader that decides, on its FIRST
+// READ, whether the stream is zlib-wrapped (RFC 1950) or raw DEFLATE (RFC 1951) — a decision that
+// needs the first two octets, because both forms are legal under that header and servers send both.
+//
+// It must not read a single byte here, and that is the whole point of this shape. DecompressBody
+// runs INSIDE persistConn.readLoop (transport.go, "if rc.addedGzip"), and the body it is handed is a
+// *bodyEOFSignal whose EOF path does `<-eofc` — a channel closed only when readLoop RETURNS. Any
+// read that reaches the end of the body from inside readLoop therefore blocks readLoop on a channel
+// only readLoop can close:
+//
+//	readLoop -> DecompressBody -> identifyDeflate -> io.Copy -> bodyEOFSignal.Read
+//	         -> condfn -> readLoop.func4 -> <-eofc      [parked forever]
+//
+// The previous version did exactly that: it drained the whole body with io.Copy to build a buffer to
+// replay the two sniffed octets from. The caller was rescued by Client.Timeout, so the bug looked
+// like a slow origin — but the readLoop goroutine and its socket were never released, and
+// CloseIdleConnections could not free them, so every deflate response leaked one of each for the
+// life of the process. A two-octet body was enough on its own: io.ReadFull hitting EOF took the same
+// path before any copy.
+//
+// Nothing is read until the caller reads, which is also how the gzip, br and zstd paths already
+// behave.
 func identifyDeflate(body io.ReadCloser) io.ReadCloser {
-	var header [2]byte
-	_, err := io.ReadFull(body, header[:])
-	if err != nil {
-		return body
-	}
-
-	if header[0] == zlibMethodDeflate &&
-		(header[1] == zlibLevelDefault || header[1] == zlibLevelLow || header[1] == zlibLevelMedium || header[1] == zlibLevelBest) {
-		return &zlibDeflateReader{
-			body: prependBytesToReadCloser(header[:], body),
-		}
-	} else if header[0] == zlibMethodDeflate {
-		return &deflateReader{
-			body: prependBytesToReadCloser(header[:], body),
-		}
-	}
-	return body
+	return &deflateSniffer{body: body}
 }
 
+// deflateSniffer picks the deflate flavour on first Read. Until then it holds only the body.
+type deflateSniffer struct {
+	_    incomparable
+	body io.ReadCloser
+	r    io.Reader // chosen on the first Read
+	err  error     // sticky
+}
+
+func (d *deflateSniffer) Read(p []byte) (int, error) {
+	if d.err != nil {
+		return 0, d.err
+	}
+	if d.r == nil {
+		var header [2]byte
+		n, err := io.ReadFull(d.body, header[:])
+		switch {
+		case n == 0:
+			// Empty body, or a read error before any octet: there is nothing to decode, and the
+			// error is the caller's to see.
+			if err == nil {
+				err = io.EOF
+			}
+			d.err = err
+			return 0, err
+		case n < 2:
+			// Too short to be a zlib header; the only thing it can be is raw DEFLATE.
+			d.r = &deflateReader{body: prependBytesToReadCloser(header[:n], d.body)}
+		case isZlibHeader(header):
+			d.r = &zlibDeflateReader{body: prependBytesToReadCloser(header[:], d.body)}
+		default:
+			// The server said `deflate`, and it is not the RFC 1950 form, so it is the RFC 1951 one.
+			d.r = &deflateReader{body: prependBytesToReadCloser(header[:], d.body)}
+		}
+	}
+	return d.r.Read(p)
+}
+
+// Close closes the UNDERLYING body. It deliberately does not reach through to the chosen decoder:
+// a decoder that was never read has no state to release, and both flate and zlib readers here are
+// themselves lazily constructed, so asking them to Close is how a nil-receiver panic gets shipped.
+func (d *deflateSniffer) Close() error { return d.body.Close() }
+
+// prependBytesToReadCloser replays b ahead of r WITHOUT draining r. The draining version was the
+// deadlock described on identifyDeflate; it also swallowed io.Copy's error and closed r while
+// returning a buffer, so a truncated body read as a complete one.
 func prependBytesToReadCloser(b []byte, r io.ReadCloser) io.ReadCloser {
-	w := new(bytes.Buffer)
-	w.Write(b)
-	io.Copy(w, r)
-	defer r.Close()
-
-	return io.NopCloser(w)
+	return &prependedBody{r: io.MultiReader(bytes.NewReader(b), r), c: r}
 }
+
+type prependedBody struct {
+	_ incomparable
+	r io.Reader
+	c io.Closer
+}
+
+func (p *prependedBody) Read(b []byte) (int, error) { return p.r.Read(b) }
+func (p *prependedBody) Close() error               { return p.c.Close() }

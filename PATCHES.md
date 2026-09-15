@@ -464,3 +464,84 @@ Regression diff against pristine v0.6.9, run identically: **34 failing / 34 fail
 regressions.** One upstream test was updated rather than deleted — `TestEncoderSearchTable` pinned
 the last-match choice, and its own comment documented it as free. The new expectation records why it
 changed.
+
+## Patch 7 — `Content-Encoding: deflate` deadlocks readLoop against itself (leak), and never decodes raw DEFLATE (corruption)
+
+### The deadlock
+
+`DecompressBody` runs **inside** `persistConn.readLoop` (`transport.go`, `if rc.addedGzip`). The body
+it is handed is a `*bodyEOFSignal` whose EOF path does `<-eofc`, and `eofc` is closed only when
+readLoop **returns**. So any read that reaches the end of the body from inside readLoop blocks
+readLoop on a channel that only readLoop can close.
+
+`identifyDeflate` did exactly that. To replay the two octets it sniffed, it drained the **entire**
+body with `io.Copy`:
+
+```
+readLoop -> DecompressBody -> identifyDeflate -> prependBytesToReadCloser -> io.Copy
+         -> bodyEOFSignal.Read -> condfn -> readLoop.func4 -> <-eofc      [parked forever]
+```
+
+Reproduced, with that exact stack, against a loopback origin answering
+`Content-Encoding: deflate` with a 25-byte zlib body.
+
+**It did not look like a deadlock.** `Client.Timeout` rescues the caller, so the symptom is
+`context deadline exceeded (Client.Timeout exceeded while awaiting headers)` — a slow origin. What
+actually happened is that the readLoop goroutine and its socket were pinned for the life of the
+process; `Transport.CloseIdleConnections` cannot free a conn whose readLoop never returns. Every
+deflate response leaked one goroutine and one fd.
+
+A **two-octet** body was enough on its own: `io.ReadFull` hitting EOF took the same `<-eofc` path
+before any copy started.
+
+### The corruption
+
+The same function decided "is this zlib or raw DEFLATE?" by comparing the first two octets against a
+list of four common CMF/FLG pairs, and **passed anything else through untouched** — while
+`DecompressBody` had already deleted `Content-Encoding` and set `res.Uncompressed = true`. `deflate`
+is famously two formats (RFC 1950 zlib-wrapped and RFC 1951 raw, both of which browsers accept), and
+a raw stream begins with the first block's BFINAL/BTYPE bits, which are not `0x78` in general. So a
+raw-DEFLATE body came back **compressed, presented as decoded**.
+
+The fork's own `TestCompressionDeflate` — which is `testCompressionDeflate(t, /*zlibWrapped=*/false)`
+— has been failing for exactly this reason, sitting unnoticed among the pre-existing upstream
+failures.
+
+### The fix
+
+```
+identifyDeflate     returns a deflateSniffer that picks the flavour on its FIRST READ; nothing is
+                    read inside readLoop, which is how the gzip/br/zstd paths already behave
+isZlibHeader        RFC 1950 §2.2's own test — CM == 8, CINFO <= 7, and (CMF<<8|FLG) % 31 == 0 —
+                    instead of a list of four pairs. Exact, not a heuristic
+                    (a raw stream passes all three only by coincidence, ~1 in 31 for the checksum)
+no pass-through     a body under `Content-Encoding: deflate` is one of the two forms or it is
+                    broken; a broken one now surfaces as flate's error instead of silent corruption
+prependBytesTo…     replays the sniffed octets with io.MultiReader instead of draining. The draining
+                    version also swallowed io.Copy's error and closed the body while returning a
+                    buffer, so a truncated body read as a complete one
+zlibDeflateReader.Close / deflateReader.Close
+                    tolerate never having been read. Both construct their decoder on first Read and
+                    Close reached straight through to it, so closing an untouched body was a
+                    nil-receiver panic
+```
+
+### Tests
+
+`transport_deflate_leak_test.go`: zlib-wrapped and raw DEFLATE both round-trip; the three
+sniff-boundary shapes (empty, one octet, two non-header octets) all return; an unread body closes
+without panicking; and after three requests that are abandoned without reading, **no goroutine is
+parked in the decode path** — with the origin still holding its sockets, so only the fix can free
+them.
+
+Ablated by restoring the eager `identifyDeflate`: all three go red with the original symptom,
+`the request never completed (… Client.Timeout exceeded while awaiting headers)`.
+
+### Verification
+
+```
+before (v0.6.9-sightglass.2): 51 failing
+after:                        50 failing
+NEW failures: none
+FIXED:        TestCompressionDeflate   <- the raw-DEFLATE corruption, upstream's own test
+```
