@@ -8360,6 +8360,7 @@ func (cc *http2ClientConn) writeHeaders(streamID uint32, endStream bool, maxFram
 func (cc *http2ClientConn) requestGzip(req *Request) bool {
 	// TODO(bradfitz): this is a copy of the logic in net/http. Unify somewhere?
 	if !cc.t.disableCompression() &&
+		!req.Header.NoAutoHeaders() &&
 		req.Header.Get("Accept-Encoding") == "" &&
 		req.Header.Get("Range") == "" &&
 		req.Method != "HEAD" {
@@ -8629,7 +8630,7 @@ func (cc *http2ClientConn) encodeHeaders(req *Request, addGzipHeader bool, trail
 		if !httpguts.ValidHeaderFieldName(k) {
 			// If the header is magic key, the headers would have been ordered
 			// by this step. It is ok to delete and not raise an error
-			if k == HeaderOrderKey || k == PHeaderOrderKey || k == HTTP1OmitKey {
+			if k == HeaderOrderKey || k == PHeaderOrderKey || k == HTTP1OmitKey || k == NoAutoHeadersKey {
 				continue
 			}
 
@@ -8782,7 +8783,7 @@ func (cc *http2ClientConn) encodeHeaders(req *Request, addGzipHeader bool, trail
 			}
 		}
 
-		if !didUA {
+		if !didUA && !req.Header.NoAutoHeaders() {
 			f("user-agent", http2defaultUserAgent)
 		}
 	}
@@ -8807,7 +8808,10 @@ func (cc *http2ClientConn) encodeHeaders(req *Request, addGzipHeader bool, trail
 	// Header list size is ok. Write the headers.
 	enumerateHeaders(func(name, value string) {
 		// skips over writing magic key headers
-		if name == PHeaderOrderKey || name == HeaderOrderKey {
+		// HTTP1OmitKey was missing here: package http's own HTTP/2 encoder wrote the magic key as
+		// a field (`http1-omit:: priority`), which is not a legal HPACK name. fhttp/http2 — the
+		// package tls-client drives — already skipped it; this copy did not.
+		if name == PHeaderOrderKey || name == HeaderOrderKey || name == HTTP1OmitKey || name == NoAutoHeadersKey {
 			return
 		}
 

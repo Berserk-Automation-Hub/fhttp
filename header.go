@@ -61,6 +61,41 @@ const PHeaderOrderKey = "PHeader-Order:"
 // wire and is skipped by the HTTP/2 and HTTP/3 encoders.
 const HTTP1OmitKey = "HTTP1-Omit:"
 
+// NoAutoHeadersKey is a magic Key that, when present, forbids this package from adding ANY header
+// the caller did not ask for. Its values are ignored; presence is the whole signal.
+//
+// Without it, a caller who states an exact request block does not get one. Three separate sites add
+// headers behind the caller's back, on every protocol:
+//
+//	Request.write          User-Agent: Go-http-client/1.1   when no user-agent key exists
+//	Transport.roundTrip    Accept-Encoding: gzip, deflate, br
+//	http2 encodeHeaders    user-agent: Go-http-client/2.0, accept-encoding: gzip, deflate, br
+//
+// None of them is reachable through the header map, because each triggers on ABSENCE — writing an
+// empty value suppresses the User-Agent ones but not the Accept-Encoding ones, which test
+// Header.Get() and therefore cannot tell "no value" from "not set". Disabling compression at the
+// Transport is the only existing lever and it is both connection-wide and entangled with response
+// decoding, so it cannot express "this request carries exactly these fields".
+//
+// The two injected values are also the loudest possible identity leak for a caller emulating a
+// browser: a byte-exact browser TLS ClientHello followed by `User-Agent: Go-http-client/2.0`.
+//
+// Setting this key costs the automatic gzip request AND the automatic gunzip of the response, which
+// is the honest pairing: this package only decodes what it asked for.
+//
+// Like the other magic keys, it is never written to the wire.
+const NoAutoHeadersKey = "No-Auto-Headers:"
+
+// NoAutoHeaders reports whether the caller has forbidden library-added headers on this request.
+// Exported because the http2 package, which has its own copy of both injection sites, must ask too.
+func (h Header) NoAutoHeaders() bool {
+	if h == nil {
+		return false
+	}
+	_, ok := h[NoAutoHeadersKey]
+	return ok
+}
+
 // Add adds the Key, value pair to the header.
 // It appends to any existing Values associated with Key.
 // The Key is case insensitive; it is canonicalized by
@@ -319,11 +354,12 @@ func (h Header) writeSubset(w io.Writer, exclude map[string]bool, trace *httptra
 		// respExcludeHeader), so writing to exclude both raced with other
 		// writers and readers and leaked the exclusions into every later
 		// write that used the same map.
-		excl := make(map[string]bool, len(exclude)+3)
+		excl := make(map[string]bool, len(exclude)+4)
 		maps.Copy(excl, exclude)
 		excl[HeaderOrderKey] = true
 		excl[PHeaderOrderKey] = true
 		excl[HTTP1OmitKey] = true
+		excl[NoAutoHeadersKey] = true
 		// HTTP/1.1-only omissions. This is the HTTP/1.1 serializer, so anything named here is
 		// dropped; the HTTP/2 and HTTP/3 encoders never reach this function and write it normally.
 		for _, name := range h[HTTP1OmitKey] {
@@ -336,10 +372,12 @@ func (h Header) writeSubset(w io.Writer, exclude map[string]bool, trace *httptra
 		kvs, sorter = h.SortedKeyValuesBy(order, excl)
 	} else {
 		excl := exclude
-		if omit, ok := h[HTTP1OmitKey]; ok {
-			excl = make(map[string]bool, len(exclude)+1)
+		omit, hasOmit := h[HTTP1OmitKey]
+		if hasOmit || h.NoAutoHeaders() {
+			excl = make(map[string]bool, len(exclude)+2)
 			maps.Copy(excl, exclude)
 			excl[HTTP1OmitKey] = true
+			excl[NoAutoHeadersKey] = true
 			for _, name := range omit {
 				for k := range h {
 					if strings.EqualFold(k, name) {

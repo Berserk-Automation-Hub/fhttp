@@ -516,7 +516,7 @@ func (t *Transport) roundTrip(req *Request) (*Response, error) {
 		for k, vv := range req.Header {
 			if !httpguts.ValidHeaderFieldName(k) {
 				// Allow the HeaderOrderKey and PHeaderOrderKey magic string, this will be handled further.
-				if k == HeaderOrderKey || k == PHeaderOrderKey || k == HTTP1OmitKey {
+				if k == HeaderOrderKey || k == PHeaderOrderKey || k == HTTP1OmitKey || k == NoAutoHeadersKey {
 					continue
 				}
 				req.closeBody()
@@ -2571,6 +2571,7 @@ func (pc *persistConn) roundTrip(req *transportRequest) (resp *Response, err err
 
 	requestedGzip := false
 	if !pc.t.DisableCompression &&
+		!req.Header.NoAutoHeaders() &&
 		req.Header.Get("Accept-Encoding") == "" &&
 		req.Header.get("accept-encoding") == "" &&
 		req.Header.Get("Range") == "" &&

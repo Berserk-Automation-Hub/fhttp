@@ -594,3 +594,79 @@ before (v0.6.9-sightglass.3): 50 failing
 after:                        49 failing
 NEW failures: none
 ```
+
+---
+
+## 8. `NoAutoHeadersKey` — the caller states the block, and the library adds nothing to it
+
+`v0.6.9-sightglass.6`
+
+A caller who states an exact request block did not get one. Three sites add headers behind the
+caller's back, and all three trigger on **absence**, so none of them is reachable through the header
+map:
+
+```
+request.go          Request.write        User-Agent: Go-http-client/1.1      when neither the
+                                                                            "User-Agent" nor the
+                                                                            "user-agent" key exists
+transport.go        Transport.roundTrip  Accept-Encoding: gzip, deflate, br  when Header.Get is ""
+http2/transport.go  encodeHeaders        user-agent: Go-http-client/2.0      when no UA field was
+                                         accept-encoding: gzip, deflate, br  emitted / Get is ""
+h2_bundle.go        the same two, in package http's own copy of the encoder
+```
+
+Measured on a loopback origin, with a caller asking for exactly three headers:
+
+```
+caller asked for:      X-One, Accept, X-Two
+
+HTTP/1.1 wire:         X-One / Accept / X-Two / User-Agent: Go-http-client/1.1
+                                              / Accept-Encoding: gzip, deflate, br
+HTTP/2  wire:          x-one / accept / x-two / accept-encoding: gzip, deflate, br
+                                              / user-agent: Go-http-client/2.0
+```
+
+Writing an empty value suppresses the two User-Agent sites (they test the map key) but **not** the
+two Accept-Encoding ones: those call `Header.Get`, which cannot distinguish "no value" from "not
+set". `Transport.DisableCompression` is the only existing lever, and it is connection-wide and
+entangled with response decoding, so it cannot express *this request carries exactly these fields*.
+
+For a caller emulating a browser the injected values are the loudest possible leak: a byte-exact
+browser TLS ClientHello followed by `user-agent: Go-http-client/2.0`.
+
+```
+header.go            NoAutoHeadersKey = "No-Auto-Headers:" and Header.NoAutoHeaders(); writeSubset
+                     excludes it on both the ordered and the unordered path
+request.go           the HTTP/1.1 User-Agent injection is gated on it
+transport.go         the HTTP/1.1 Accept-Encoding injection is gated on it; the header-name
+                     validator allows the key (it ends in ':', which httpguts rejects)
+http2/transport.go   requestGzip and the didUA fallback are gated on it; the key is skipped by the
+h2_bundle.go         encoder and allowed by the validator, as the other magic keys already are
+```
+
+Values are ignored — presence is the whole signal. The cost is the automatic gzip request **and**
+the automatic gunzip of the response, which is the honest pairing: the package only decodes what it
+asked for.
+
+### Also fixed here
+
+`h2_bundle.go`'s encoder skipped `PHeaderOrderKey` and `HeaderOrderKey` when writing fields but not
+`HTTP1OmitKey`, so package `http`'s own HTTP/2 client emitted `http1-omit:: priority` as a header
+field — not a legal HPACK name. `fhttp/http2`, the package `tls-client` drives, already skipped it;
+this copy did not, so the defect was one `Transport` choice away from the wire.
+
+### Tests
+
+`no_auto_headers_test.go`: with the key, `Request.Write` produces exactly the stated block and no
+`User-Agent`; **without** it the same request grows the injected one (the ablation), so the test
+fails if the gate is removed. The magic key never reaches the wire on either the ordered or the
+unordered path. The HTTP/2 sites are proven end-to-end on a real h2 loopback origin by Sightglass's
+`parity.TestParityCallerStatedBlockIsExactOnH2`.
+
+### Verification
+
+```
+before (v0.6.9-sightglass.5): 33 failing
+after:                        33 failing
+NEW failures: none
+```

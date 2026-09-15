@@ -628,8 +628,8 @@ func (r *Request) write(w io.Writer, usingProxy bool, extraHeaders Header, waitF
 		}
 	}
 
-	// if user agent field is not present, add it
-	if uaCap, uaLow := r.Header["User-Agent"], r.Header["user-agent"]; uaCap == nil && uaLow == nil {
+	// if user agent field is not present, add it — unless the caller has stated an exact block.
+	if uaCap, uaLow := r.Header["User-Agent"], r.Header["user-agent"]; uaCap == nil && uaLow == nil && !r.Header.NoAutoHeaders() {
 		r.Header.Set("User-Agent", "Go-http-client/1.1")
 	}
 

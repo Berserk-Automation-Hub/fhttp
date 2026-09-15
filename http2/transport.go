@@ -1506,6 +1506,7 @@ func (cc *ClientConn) writeHeaders(streamID uint32, endStream bool, maxFrameSize
 func (cc *ClientConn) requestGzip(req *http.Request) bool {
 	// TODO(bradfitz): this is a copy of the logic in net/http. Unify somewhere?
 	if !cc.t.disableCompression() &&
+		!req.Header.NoAutoHeaders() &&
 		req.Header.Get("Accept-Encoding") == "" &&
 		req.Header.Get("Range") == "" &&
 		req.Method != "HEAD" {
@@ -1781,7 +1782,7 @@ func (cc *ClientConn) encodeHeaders(req *http.Request, addGzipHeader bool, trail
 		if !httpguts.ValidHeaderFieldName(k) && k != ":protocol" {
 			// If the header is magic key, the headers would have been ordered
 			// by this step. It is ok to delete and not raise an error
-			if k == http.HeaderOrderKey || k == http.PHeaderOrderKey || k == http.HTTP1OmitKey {
+			if k == http.HeaderOrderKey || k == http.PHeaderOrderKey || k == http.HTTP1OmitKey || k == http.NoAutoHeadersKey {
 				continue
 			}
 
@@ -1938,7 +1939,7 @@ func (cc *ClientConn) encodeHeaders(req *http.Request, addGzipHeader bool, trail
 			}
 		}
 
-		if !didUA {
+		if !didUA && !req.Header.NoAutoHeaders() {
 			f("user-agent", defaultUserAgent)
 		}
 	}
@@ -1963,7 +1964,7 @@ func (cc *ClientConn) encodeHeaders(req *http.Request, addGzipHeader bool, trail
 	// Header list size is ok. Write the headers.
 	enumerateHeaders(func(name, value string) {
 		// skips over writing magic key headers
-		if name == http.PHeaderOrderKey || name == http.HeaderOrderKey || name == http.HTTP1OmitKey {
+		if name == http.PHeaderOrderKey || name == http.HeaderOrderKey || name == http.HTTP1OmitKey || name == http.NoAutoHeadersKey {
 			return
 		}
 
