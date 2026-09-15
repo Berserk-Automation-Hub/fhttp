@@ -1182,10 +1182,11 @@ func (t *Transport) dial(ctx context.Context, network, addr string) (net.Conn, e
 // These three options are racing against each other and use
 // wantConn to coordinate and agree about the winning outcome.
 type wantConn struct {
-	cm    connectMethod
-	key   connectMethodKey // cm.Key()
-	ctx   context.Context  // context for dial
-	ready chan struct{}    // closed when pc, err pair is delivered
+	cm        connectMethod
+	key       connectMethodKey   // cm.Key()
+	ctx       context.Context    // context for dial (detached from the request's cancellation)
+	cancelCtx context.CancelFunc // releases ctx once the dial goroutine is done
+	ready     chan struct{}      // closed when pc, err pair is delivered
 
 	// hooks for testing to know when dials are done
 	// beforeDial is called in the getConn goroutine when the dial is queued.
@@ -1333,10 +1334,23 @@ func (t *Transport) getConn(treq *transportRequest, cm connectMethod) (pc *persi
 		trace.GetConn(cm.addr())
 	}
 
+	// Detach the dial from the request context's cancellation signal
+	// (golang.org/issue/32406). A single getConn races an idle-conn lookup
+	// against a fresh dial; when a pooled/idle conn wins and the request then
+	// finishes (or is cancelled), the request context is cancelled. If the
+	// losing dial shares that context it is torn down mid-TCP-connect /
+	// mid-handshake and the socket is abandoned — invisible to the client
+	// (0% error) but costing a socket()+connect()+ClientHello per waste and a
+	// wasted accept+goroutine+failed-handshake on the origin. A detached dial
+	// instead runs to completion and joins the idle pool for a future request.
+	// We keep the request context's VALUES (httptrace, etc.) via WithoutCancel.
+	dialCtx, dialCancel := context.WithCancel(context.WithoutCancel(ctx))
+
 	w := &wantConn{
 		cm:         cm,
 		key:        cm.key(),
-		ctx:        ctx,
+		ctx:        dialCtx,
+		cancelCtx:  dialCancel,
 		ready:      make(chan struct{}, 1),
 		beforeDial: testHookPrePendingDial,
 		afterDial:  testHookPostPendingDial,
@@ -1442,6 +1456,10 @@ func (t *Transport) queueForDial(w *wantConn) {
 // If the dial is cancelled or unsuccessful, dialConnFor decrements t.connCount[w.cm.Key()].
 func (t *Transport) dialConnFor(w *wantConn) {
 	defer w.afterDial()
+	// Release the detached dial context once this dial goroutine is done.
+	// Safe on every path: t.dialConn has returned, so an established conn's
+	// lifetime no longer depends on this context (see getConn's WithoutCancel).
+	defer w.cancelCtx()
 
 	pc, err := t.dialConn(w.ctx, w.cm)
 	delivered := w.tryDeliver(pc, err)

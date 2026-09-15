@@ -75,16 +75,53 @@ func (p *clientConnPool) shouldTraceGetConn(st clientConnIdleState) bool {
 	return !st.freshConn
 }
 
+// PATCH 3 (Sightglass) — the H2 connect must honour the REQUEST's context.
+//
+// Upstream x/net/http2 threads a context all the way into the dial
+// (dialClientConn(ctx, addr, singleUse), client_conn_pool.go@v0.48.0), so a cancelled request always
+// unblocks: its dial dies and `call.done` closes. This fork carries the pre-2021 pool — the dial
+// takes no context — and the SHIPPED stack makes that unbounded, because tls-client v1.15.1 hands
+// http2.Transport a legacy, context-free DialTLS hook that dials with context.Background()
+// (roundtripper.go:483 dialTLSHTTP2). So a waiter blocked on `<-call.done` waited FOREVER whenever an
+// origin stopped completing TLS handshakes: past the request's own deadline, past Client.Timeout,
+// holding a goroutine and a socket each time. PROVEN by parity.TestParityH2DialHonoursRequestContext
+// (loopback origin that serves one h2 conn then stalls every later one): PRE this patch the second
+// request never returned inside 20 s under a 2 s client timeout; POST it returns in ~2 s.
+//
+// The dial itself is deliberately NOT abandoned — it has no context to cancel, and cancelling it is
+// also the wrong answer (see the round-1 H1 fix in ../transport.go): it runs to completion and its
+// connection joins the pool for a later request, so no socket is wasted. Nothing on the wire changes.
 func (p *clientConnPool) getClientConn(req *http.Request, addr string, dialOnMiss bool) (*ClientConn, error) {
 	if isConnectionCloseRequest(req) && dialOnMiss {
 		// It gets its own connection.
 		traceGetConn(req, addr)
 		const singleUse = true
-		cc, err := p.t.dialClientConn(addr, singleUse)
-		if err != nil {
-			return nil, err
+		// Same defect, same fix: this dial is uncancellable too, so run it off the caller's
+		// goroutine and let the caller leave on its own context. A single-use conn joins no pool, so
+		// an abandoned one is CLOSED rather than leaked.
+		type singleUseDial struct {
+			cc  *ClientConn
+			err error
 		}
-		return cc, nil
+		ch := make(chan singleUseDial, 1)
+		go func() {
+			cc, err := p.t.dialClientConn(addr, singleUse)
+			ch <- singleUseDial{cc, err}
+		}()
+		select {
+		case r := <-ch:
+			if r.err != nil {
+				return nil, r.err
+			}
+			return r.cc, nil
+		case <-req.Context().Done():
+			go func() {
+				if r := <-ch; r.cc != nil {
+					r.cc.Close()
+				}
+			}()
+			return nil, req.Context().Err()
+		}
 	}
 	p.mu.Lock()
 	for _, cc := range p.conns[addr] {
@@ -103,8 +140,12 @@ func (p *clientConnPool) getClientConn(req *http.Request, addr string, dialOnMis
 	traceGetConn(req, addr)
 	call := p.getStartDialLocked(addr)
 	p.mu.Unlock()
-	<-call.done
-	return call.res, call.err
+	select {
+	case <-call.done:
+		return call.res, call.err
+	case <-req.Context().Done():
+		return nil, req.Context().Err()
+	}
 }
 
 // dialCall is an in-flight Transport dial call to a host.

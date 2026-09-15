@@ -764,7 +764,7 @@ func (t *Transport) newClientConn(c net.Conn, addr string, singleUse bool) (*Cli
 		nextStreamID:          1,
 		maxFrameSize:          16 << 10,           // spec default
 		initialWindowSize:     65535,              // spec default
-		maxConcurrentStreams:  1000,               // "infinite", per spec. 1000 seems good enough.
+		maxConcurrentStreams:  ChromeInitialMaxConcurrentStreams, // [SIGHTGLASS PATCH 3] was 1000; Chrome uses kInitialMaxConcurrentStreams = 100 (chrome_concurrency.go)
 		peerMaxHeaderListSize: 0xffffffffffffffff, // "infinite", per spec. Use 2^64-1 instead.
 		streams:               make(map[uint32]*clientStream),
 		singleUse:             singleUse,
@@ -975,7 +975,13 @@ func (cc *ClientConn) idleStateLocked() (st clientConnIdleState) {
 		// writing it.
 		maxConcurrentOkay = true
 	} else {
-		maxConcurrentOkay = int64(len(cc.streams)+1) < int64(cc.maxConcurrentStreams)
+		// [SIGHTGLASS PATCH 3] was `<`, which reserved one slot and capped the connection at
+		// maxConcurrentStreams-1 streams (measured: 99 against a 100 limit, 255 against 256).
+		// Chrome opens exactly max_concurrent_streams_ (net/spdy/spdy_session.cc:1697-1699,
+		// `if (active_streams_.size() + created_streams_.size() < max_concurrent_streams_)
+		//     return CreateStream(...)`, else HTTP2_SESSION_STALLED_MAX_STREAMS), and
+		// awaitOpenSlotForRequest two hundred lines below already uses `<=`. See chrome_concurrency.go.
+		maxConcurrentOkay = int64(len(cc.streams)+1) <= int64(cc.maxConcurrentStreams)
 	}
 
 	st.canTakeNewRequest = cc.goAway == nil && !cc.closed && !cc.closing && maxConcurrentOkay &&
@@ -1255,7 +1261,9 @@ func (cc *ClientConn) roundTrip(req *http.Request) (res *http.Response, gotErrAf
 
 	cc.wmu.Lock()
 	endStream := !hasBody && !hasTrailers
-	werr := cc.writeHeaders(cs.ID, endStream, int(cc.maxFrameSize), hdrs)
+	// SIGHTGLASS PATCH (2/2): resolve this request's own HEADERS priority. req is already in scope
+	// here; upstream simply never looked at it.
+	werr := cc.writeHeaders(cs.ID, endStream, int(cc.maxFrameSize), hdrs, requestHeaderPriority(req))
 	cc.wmu.Unlock()
 	traceWroteHeaders(cs.trace)
 	cc.mu.Unlock()
@@ -1425,7 +1433,12 @@ func (cc *ClientConn) awaitOpenSlotForRequest(req *http.Request) error {
 }
 
 // requires cc.wmu be held
-func (cc *ClientConn) writeHeaders(streamID uint32, endStream bool, maxFrameSize int, hdrs []byte) error {
+//
+// SIGHTGLASS PATCH (1/2 of the fhttp diff; see http2/priority_perrequest.go): prio carries the
+// HEADERS-embedded PRIORITY for THIS stream. nil keeps the upstream behaviour exactly
+// (Transport.HeaderPriority, else fhttp's {exclusive, weight 255, dep 0} default), so nothing changes
+// for a caller that sets no per-request priority.
+func (cc *ClientConn) writeHeaders(streamID uint32, endStream bool, maxFrameSize int, hdrs []byte, prio *PriorityParam) error {
 	first := true // first frame written (HEADERS is first, then CONTINUATION)
 	for len(hdrs) > 0 && cc.werr == nil {
 		chunk := hdrs
@@ -1443,6 +1456,11 @@ func (cc *ClientConn) writeHeaders(streamID uint32, endStream bool, maxFrameSize
 
 			if cc.t.HeaderPriority != nil {
 				defaultHeaderPriorityParam = *cc.t.HeaderPriority
+			}
+			// SIGHTGLASS PATCH: a per-request priority wins over the per-transport one. This is the
+			// whole point of the patch — one connection, different weights per stream, like Chrome.
+			if prio != nil {
+				defaultHeaderPriorityParam = *prio
 			}
 
 			cc.fr.WriteHeaders(HeadersFrameParam{
@@ -1656,7 +1674,9 @@ func (cs *clientStream) writeRequestBody(body io.Reader, bodyCloser io.Closer) (
 	// Two ways to send END_STREAM: either with trailers, or
 	// with an empty DATA frame.
 	if len(trls) > 0 {
-		err = cc.writeHeaders(cs.ID, true, maxFrameSize, trls)
+		// SIGHTGLASS PATCH: trailers keep the transport-level priority (nil). A trailer HEADERS frame
+		// is not a new stream and Chrome does not re-prioritise on one.
+		err = cc.writeHeaders(cs.ID, true, maxFrameSize, trls, nil)
 	} else {
 		err = cc.fr.WriteData(cs.ID, true, nil)
 	}
@@ -2458,9 +2478,27 @@ func (b transportResponseBody) Read(p []byte) (n int, err error) {
 	var connAdd, streamAdd int32
 
 	// Check the conn-level first, before the stream-level.
-	// Use dynamic connFlow logic
-	if v := cc.inflow.available(); v < int32(cc.connFlow/2) {
-		connAdd = int32(cc.connFlow) - v
+	//
+	// SIGHTGLASS PATCH (A-15) — REPLENISH TO THE FULL CONNECTION WINDOW, NOT TO connFlow.
+	//
+	// cc.inflow was seeded at :879 with `cc.connFlow + initialWindowSize`, i.e. the preface
+	// WINDOW_UPDATE delta PLUS HTTP/2's own 65535-byte default initial window. For a Chrome-152
+	// profile that is 15663105 + 65535 = 15728640 — exactly Chrome's session_max_recv_window_size_.
+	// Upstream then topped the window back up to `cc.connFlow` (15663105) on every refill, so from the
+	// FIRST refill onward the connection window sat permanently 65535 bytes below Chrome's, and every
+	// WINDOW_UPDATE delta this client emitted was 65535 short of the value Chrome would emit. Both are
+	// plainly visible to the peer.
+	//
+	// Chrome (net/spdy/spdy_session.cc SpdySession::IncreaseRecvWindowSize):
+	//   if (session_unacked_recv_window_bytes_ > session_max_recv_window_size_ / 2 || elapsed >= …) {
+	//       SendWindowUpdateFrame(kSessionFlowControlStreamId, session_unacked_recv_window_bytes_, HIGHEST);
+	//       session_unacked_recv_window_bytes_ = 0;   // window is now back at session_max_recv_window_size_
+	//   }
+	// i.e. trigger at half the FULL window, and return the whole accumulated unacked amount — which is
+	// exactly `connWindow - available`.
+	connWindow := int32(cc.connFlow) + int32(initialWindowSize)
+	if v := cc.inflow.available(); v < connWindow/2 {
+		connAdd = connWindow - v
 		cc.inflow.add(connAdd)
 	}
 
@@ -2716,7 +2754,9 @@ func (rl *clientConnReadLoop) processSettings(f *SettingsFrame) error {
 		case SettingMaxFrameSize:
 			cc.maxFrameSize = s.Val
 		case SettingMaxConcurrentStreams:
-			cc.maxConcurrentStreams = s.Val
+			// [SIGHTGLASS PATCH 3] was `cc.maxConcurrentStreams = s.Val`; Chrome clamps the peer's
+			// advertised value to kMaxConcurrentStreamLimit = 256 (chrome_concurrency.go).
+			cc.maxConcurrentStreams = chromeClampMaxConcurrentStreams(s.Val)
 		case SettingMaxHeaderListSize:
 			cc.peerMaxHeaderListSize = uint64(s.Val)
 		case SettingInitialWindowSize:
