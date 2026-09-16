@@ -2105,6 +2105,19 @@ func (cc *ClientConn) readLoop() {
 	if ce, ok := cc.readerErr.(ConnectionError); ok {
 		cc.wmu.Lock()
 		cc.fr.WriteGoAway(0, ErrCode(ce), nil)
+		// FLUSH IT. Framer.endWrite writes into cc.bw, a *bufio.Writer, and does not flush; every
+		// other write path in this file calls cc.bw.Flush() explicitly. This one did not, so the
+		// GOAWAY sat in the buffer and the deferred rl.cleanup() closed the connection and
+		// discarded it.
+		//
+		// The peer therefore saw an ABRUPT CLOSE where it should have seen a diagnosed one. That is
+		// two things at once: the error code the peer needs to understand what it did wrong is
+		// lost, and a browser is distinguishable from this client in one frame — Chrome answers a
+		// connection-level protocol error with GOAWAY and then closes, which is exactly what this
+		// code was trying to do.
+		//
+		// Inherited from upstream golang.org/x/net/http2, which has the same omission.
+		cc.bw.Flush()
 		cc.wmu.Unlock()
 	}
 }

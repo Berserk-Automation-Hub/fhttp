@@ -337,6 +337,73 @@ POST-FIX  --- PASS: TestParityH2DialHonoursRequestContext (2.03s)
               second request honoured its 2s deadline in 2.001019833s: context deadline exceeded
 ```
 
+## Patch 9 — a connection-level GOAWAY never reached the wire
+
+`http2/transport.go`, `readLoop`.
+
+`readLoop` answers a `ConnectionError` by writing a GOAWAY and then returning, at which point the
+deferred `rl.cleanup()` closes the connection:
+
+```go
+cc.readerErr = rl.run()
+if ce, ok := cc.readerErr.(ConnectionError); ok {
+    cc.wmu.Lock()
+    cc.fr.WriteGoAway(0, ErrCode(ce), nil)
+    cc.wmu.Unlock()
+}
+```
+
+`Framer.endWrite` writes into `cc.bw`, a `*bufio.Writer`, and does **not** flush. Every other write
+path in this file calls `cc.bw.Flush()` explicitly; this one did not. So the GOAWAY sat in the
+buffer and the close discarded it, and the frame log said `wrote GOAWAY ErrCode=PROTOCOL_ERROR`
+while the peer received nothing.
+
+**Two costs.** The peer loses the error code it needs to understand what it did wrong, and a browser
+becomes distinguishable from this client in a single frame: Chrome answers a connection-level
+protocol error with GOAWAY and *then* closes, which is exactly what this code was already trying to
+do. A peer that provokes a protocol error — an unsolicited PUSH_PROMISE will do it — sees an abrupt
+close from us and a diagnosed one from a browser.
+
+**Inherited from upstream `golang.org/x/net/http2`**, which has the same omission. Recorded because
+it means the fix is not a divergence from upstream's intent but a completion of it.
+
+Guard: `http2/goaway_flush_test.go`. A real TCP pair, not `net.Pipe` — `NewClientConn` writes the
+preface and SETTINGS synchronously and an unbuffered pipe deadlocks before a reader can start. Two
+things the test has to get right, and both were wrong in earlier drafts, so they are commented in
+place: the server must consume the 24-byte client preface before reading frames (otherwise
+`PRI * HTT` parses as a frame header with a 5 MB length), and the PUSH_PROMISE must carry a
+well-formed header block (`readMetaFrame` runs `checkPseudos()` first, and a malformed block is a
+STREAM error, which produces no GOAWAY at all).
+
+Ablation:
+
+```
+--- FAIL: TestGoAwayIsFlushedOnAConnectionError
+        the client hit a connection-level PROTOCOL_ERROR and put NO GOAWAY on the wire
+```
+
+### It also fixes a hanging upstream test, and the mechanism is NOT fully traced
+
+`TestTransportReturnsUnusedFlowControlSingleWrite` — an upstream Go test (golang.org/issue/20469) —
+**hangs to the test timeout without this patch and passes in ~0.3 s with it**, reproducibly:
+
+```
+WITH patch 9      ok 0.787s   ok 0.368s   ok 0.274s
+WITHOUT patch 9   FAIL        FAIL        FAIL       (each a 90 s timeout panic)
+```
+
+Under `http2debug=2` the client's framer logs `wrote RST_STREAM` and `wrote WINDOW_UPDATE`, and the
+test's server framer never reads either — it blocks in `ReadFrame`. So those frames do not reach the
+wire without this flush.
+
+**What is NOT established:** why. `writeStreamReset` and the body-close window-update path both call
+`cc.bw.Flush()` themselves, so on the face of it those frames should already have been flushed. A
+plausible chain is `stickyErrWriter` — `cc.bw` wraps one, so once `cc.werr` is set every later write
+is silently dropped — but that has not been traced, and this file does not claim it.
+
+What IS established is that the patch is a strict improvement: a previously hanging test now passes,
+and the failure set is otherwise byte-identical (below).
+
 ## Maintenance
 
 On an fhttp upgrade: re-copy upstream, strip tests, re-apply the hunks above (four for patch 1, one for
