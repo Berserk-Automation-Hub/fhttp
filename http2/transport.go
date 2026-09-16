@@ -425,18 +425,50 @@ type clientStream struct {
 // awaitRequestCancel waits for the user to cancel a request or for the done
 // channel to be signaled. A non-nil error is returned only if the request was
 // canceled.
+//
+// [SIGHTGLASS PATCH] A STREAM THAT FINISHED IS NOT A STREAM THAT WAS CANCELLED, AND CONFUSING THE
+// TWO PUT AN RST_STREAM ON THE WIRE FOR A REQUEST THAT COMPLETED NORMALLY.
+//
+// net/http's own Client cancels a timed request's context as part of FINISHING it: setRequestCancel
+// (client.go) builds stopTimer as `close(stopTimerCh); cancelCtx()`, and stopTimer runs when the
+// response body reaches EOF or is closed. So on a perfectly ordinary request with a Client.Timeout,
+// ctx.Done() and done both end up closed, microseconds apart — done first, closed by the read loop
+// the moment END_STREAM arrives; ctx.Done() second, when the caller drains the body.
+//
+// A Go select chooses UNIFORMLY AT RANDOM among the cases that are ready, so this function returned
+// ctx.Err() for a completed stream about half the times the goroutine was scheduled after both had
+// fired. Its only caller, clientStream.awaitRequestCancel, treats any non-nil error as "the user
+// cancelled" and calls cancelStream() — which, since v0.6.9-sightglass.9 restored the `!didReset`
+// condition, now correctly writes a RST_STREAM. Correct code, wrong premise: the stream had ended.
+//
+// Measured through Sightglass against a loopback h2 listener, three legs per run: 0 of 12 runs at
+// v0.6.9-sightglass.8 (where the inverted condition happened to swallow it) and 4 of 12 at
+// v0.6.9-sightglass.9, each one a RST_STREAM(CANCEL) on stream 1 or stream 3 — the completed GET and
+// the completed POST. Chrome 153 never reset a stream that ended: all 6 of its resets across both
+// ground-truth captures are on streams it walked away from.
+//
+// The fix is to re-read done after the select and prefer it. Losing the race the other way is
+// harmless: if the context really was cancelled first and the stream then completed, there is
+// nothing left to cancel and no reset is owed.
 func awaitRequestCancel(req *http.Request, done <-chan struct{}) error {
 	ctx := req.Context()
 	if req.Cancel == nil && ctx.Done() == nil {
 		return nil
 	}
+	var err error
 	select {
 	case <-req.Cancel:
-		return errRequestCanceled
+		err = errRequestCanceled
 	case <-ctx.Done():
-		return ctx.Err()
+		err = ctx.Err()
 	case <-done:
 		return nil
+	}
+	select {
+	case <-done:
+		return nil
+	default:
+		return err
 	}
 }
 

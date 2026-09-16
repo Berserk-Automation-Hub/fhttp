@@ -472,6 +472,101 @@ after:  1 failing  (TestTransportRejectsConnHeaders only)
 NEW failures: none
 ```
 
+## Patch 12 — a stream that FINISHED was reported as a stream that was CANCELLED, and patch 11 turned that into an RST_STREAM
+
+### The defect
+
+Patch 11 restored `cancelStream()`'s `!didReset` condition, so a cancellation that arrives before any
+reset now correctly writes one. That was right, and it exposed a second defect underneath it: the
+caller was asking the wrong question.
+
+`awaitRequestCancel(req, done)` selects over three channels — `req.Cancel`, `ctx.Done()` and `done`
+(the stream's completion). Its one caller, `clientStream.awaitRequestCancel`, treats any non-nil
+return as "the user cancelled" and calls `cancelStream()`.
+
+The problem is that **`net/http`'s own Client cancels a timed request's context as part of FINISHING
+it.** `setRequestCancel` (client.go) builds
+
+```go
+stopTimer = func() { once.Do(func() { close(stopTimerCh); if cancelCtx != nil { cancelCtx() } }) }
+```
+
+and `stopTimer` runs when the response body reaches EOF or is closed. So on an entirely ordinary
+request with a `Client.Timeout`, both `ctx.Done()` and `done` end up closed — `done` first, closed by
+the read loop the moment `END_STREAM` arrives; `ctx.Done()` a few microseconds later, when the caller
+drains the body.
+
+**A Go select chooses uniformly at random among the cases that are ready.** So this function returned
+`ctx.Err()` for a completed stream roughly half the times its goroutine was scheduled after both had
+fired, and with patch 11 in place that wrong premise became a real `RST_STREAM(CANCEL)` on a stream
+the server had already ended.
+
+Chrome 153 never resets a stream that ended: all 6 of its RST_STREAMs across both Sightglass
+ground-truth captures are on streams it abandoned, and ~94 completed streams carry none. A reset on a
+completed stream is as loggable as the duplicate patch 11 removed.
+
+Measured through Sightglass against a loopback h2 listener, 12 runs of a three-leg scenario
+(bodyless GET, POST with a body, one abandoned body):
+
+```
+v0.6.9-sightglass.8   0 of 12 runs   (the inverted condition happened to swallow it)
+v0.6.9-sightglass.9   4 of 12 runs   RST_STREAM(CANCEL) on stream 1 or 3 — the COMPLETED GET/POST
+```
+
+and on the 240-leg guard (120 abandoned + 120 completed on one connection), `.9` reset **48 of 120
+completed streams**.
+
+### The fix
+
+Re-read `done` after the select and prefer it:
+
+```go
+var err error
+select {
+case <-req.Cancel:
+	err = errRequestCanceled
+case <-ctx.Done():
+	err = ctx.Err()
+case <-done:
+	return nil
+}
+select {
+case <-done:
+	return nil
+default:
+	return err
+}
+```
+
+Losing the race the other way is harmless: if the context really was cancelled first and the stream
+then completed, there is nothing left to cancel and no reset is owed.
+
+### Tests
+
+`http2/await_request_cancel_test.go`. Like patch 11's test it deliberately does NOT drive a request —
+the defect is a 50/50 schedule race and a 50% assertion is a coin flip, not a guard. It calls
+`awaitRequestCancel` directly with both channels already closed, which is exactly the state a
+completed timed request leaves behind, **200 times**, because one call says nothing against a
+uniform-random select. It also pins the three cases the fix must not break: a cancelled context on an
+open stream, an expired deadline on an open stream, and a finished stream under a live context.
+
+Ablation: deleting the second select (returning `err` directly) fails with
+
+```
+awaitRequestCancel reported a cancellation on 102 of 200 calls where the stream was ALREADY DONE
+```
+
+### Verification
+
+```
+before (v0.6.9-sightglass.9): 34 failing  (pre-existing upstream; see the set in fork.before)
+after:                        34 failing  (identical set)
+NEW failures: none
+```
+
+Both runs with `go test ./... -count=1 -timeout 40m`. The shorter default timeout is not enough when
+two full suites run concurrently on this machine and produces two spurious package-level timeouts.
+
 ## Maintenance
 
 On an fhttp upgrade: re-copy upstream, strip tests, re-apply the hunks above (four for patch 1, one for
