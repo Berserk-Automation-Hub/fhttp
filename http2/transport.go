@@ -470,7 +470,30 @@ func (cs *clientStream) cancelStream() {
 	cs.didReset = true
 	cc.mu.Unlock()
 
-	if didReset {
+	// [SIGHTGLASS PATCH] THE CONDITION WAS INVERTED, AND IT PUT A FRAME ON THE WIRE THAT NO BROWSER
+	// SENDS.
+	//
+	// didReset means "we have ALREADY sent a RST_STREAM for this stream". Resetting when it is true
+	// is therefore resetting a second time; upstream golang.org/x/net/http2 reads `!didReset` here
+	// and this fork read `didReset`, the same function byte-identical but for the negation.
+	//
+	// The race that exposes it: transportResponseBody.Close() writes RST_STREAM(CANCEL), sets
+	// didReset = true, writes WINDOW_UPDATE(0, unread) to return connection flow control, and then
+	// forgets the stream. If the request context is cancelled by that same Close(), cancelStream()
+	// runs just behind it, observes didReset == true and writes a SECOND reset — producing exactly
+	// the sequence measured on our own wire:
+	//
+	//	RST_STREAM(N, CANCEL)  WINDOW_UPDATE(0, unread)  RST_STREAM(N, CANCEL)
+	//
+	// Chrome 153 sent exactly one RST_STREAM per reset stream, 6 resets on 6 distinct streams across
+	// both captures, never two on one stream. A second reset on a stream the peer has already closed
+	// is trivially loggable by any origin.
+	//
+	// Negating it also restores the intent on the other branch: a cancel that arrives BEFORE any
+	// reset now sends one and forgets the stream, which is what the function is for. (No stream-map
+	// leak resulted from the old code — Close() calls forgetStreamID unconditionally — but the reset
+	// it owed the peer was never sent.)
+	if !didReset {
 		cc.writeStreamReset(cs.ID, ErrCodeCancel, nil)
 		cc.forgetStreamID(cs.ID)
 	}

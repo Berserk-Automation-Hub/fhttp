@@ -404,6 +404,74 @@ is silently dropped — but that has not been traced, and this file does not cla
 What IS established is that the patch is a strict improvement: a previously hanging test now passes,
 and the failure set is otherwise byte-identical (below).
 
+## Patch 11 — `cancelStream()` reset a stream precisely when it had already been reset
+
+### The defect
+
+`clientStream.didReset` means "we have already sent a RST_STREAM for this stream". The reset
+therefore belongs on the `!didReset` branch, which is what upstream
+`golang.org/x/net/http2` has. This fork read `didReset` — the same function, byte-identical but for
+the negation — so it did the opposite of its purpose in both directions:
+
+- a stream that had **already** been reset got a **second** `RST_STREAM`;
+- a stream that had **not** been reset got **none**, so the reset the function owed the peer was
+  never sent.
+
+The first is a wire divergence. Chrome 153 sends exactly one `RST_STREAM` per reset stream — 6
+resets on 6 distinct streams across both ground-truth captures, never two on one stream — and a
+second reset on a stream the peer has already closed is trivially loggable by any origin.
+
+The race that exposes it: `transportResponseBody.Close()` writes `RST_STREAM(CANCEL)`, sets
+`didReset = true`, writes `WINDOW_UPDATE(0, unread)` to return connection flow control, then forgets
+the stream. When the request context is cancelled by that same `Close()`, `cancelStream()` runs just
+behind it, observes `didReset == true` and writes the second reset. The measured sequence is exactly:
+
+```
+RST_STREAM(N, CANCEL)   WINDOW_UPDATE(0, unread)   RST_STREAM(N, CANCEL)
+```
+
+Reproduced in Sightglass at **4/40, 3/40, 3/40 runs (~8-10%)**, more under CPU load.
+
+No stream-map leak resulted from the old code — `Close()` calls `forgetStreamID` unconditionally —
+so the only lost behaviour on the other branch was the reset itself.
+
+### The fix
+
+Negate the condition. One character, and it restores both branches at once.
+
+### Tests
+
+`http2/cancel_stream_reset_test.go` deliberately does **not** drive a request. The defect surfaces
+through a race that fires ~10% of the time, and a 10% assertion is not a guard — it is a coin flip
+that is green most of the time. The test calls `cancelStream()` directly with each value of
+`didReset` over a real TCP pair and counts the `RST_STREAM` frames the peer actually received, so it
+pins the condition and gives the same answer on every run.
+
+Ablation, restoring the inverted condition — it fails in **both** directions, which is the point:
+
+```
+didReset=false: peer received 0 RST_STREAM, want 1
+didReset=true:  peer received 1 RST_STREAM, want 0
+```
+
+### Verification
+
+Baseline before the fix, measured through Sightglass's own H2 census over five independent
+attempts of 40 runs each:
+
+```
+4/40  3/40  3/40  1/40  1/40   =  12 of 200 runs (6.0%) sent two RST_STREAM on one stream
+```
+
+Regression diff:
+
+```
+before: 2 failing  (TestTransportRejectsConnHeaders, pre-existing upstream;
+                    TestCancelStreamResetsOnlyWhenNotAlreadyReset, this patch's own guard)
+after:  1 failing  (TestTransportRejectsConnHeaders only)
+NEW failures: none
+```
+
 ## Maintenance
 
 On an fhttp upgrade: re-copy upstream, strip tests, re-apply the hunks above (four for patch 1, one for
