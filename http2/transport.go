@@ -105,7 +105,15 @@ type Transport struct {
 	//
 	// nil preserves upstream behaviour exactly.
 	HPACKIndexingPolicy func(hpack.HeaderField) bool
-	HeaderTableSize     uint32 // if nil, will use global initialHeaderTableSize
+
+	// HPACKStaticNameLastMatch selects which STATIC table entry a duplicated header NAME resolves
+	// to for a literal-with-indexed-name. False (default) = first match, which is Chrome's. True =
+	// last match, which is upstream's and Firefox's.
+	//
+	// [SIGHTGLASS PATCH] one byte per HEADERS block, so it is per-engine and must come from the
+	// caller's profile rather than from a constant in this package.
+	HPACKStaticNameLastMatch bool
+	HeaderTableSize          uint32 // if nil, will use global initialHeaderTableSize
 
 	// IdleConnTimeout is the maximum amount of time an idle (keep-alive)
 	// connection will remain idle before closing itself. Zero means no limit.
@@ -848,6 +856,7 @@ func (t *Transport) newClientConn(c net.Conn, addr string, singleUse bool) (*Cli
 	// [SIGHTGLASS PATCH] Install the transport's indexing policy on this connection's request
 	// encoder. Set once at construction: HPACK is stateful, so a policy that changed mid-connection
 	// would desynchronise our dynamic table from the peer's view of it.
+	cc.henc.SetStaticNameIndexPolicy(t.HPACKStaticNameLastMatch)
 	if t.HPACKIndexingPolicy != nil {
 		cc.henc.SetIndexingPolicy(t.HPACKIndexingPolicy)
 	}

@@ -33,6 +33,14 @@ type headerFieldTable struct {
 	// the same name. See above for a definition of "unique id".
 	byName map[string]uint64
 
+	// static marks this table as a STATIC table.
+	//
+	// [SIGHTGLASS PATCH] idToIndex used to decide static-vs-dynamic by comparing against the single
+	// global `staticTable` pointer. There is now more than one static table (see newStaticTable),
+	// and a second one would have been mis-indexed as DYNAMIC — computing len()-k instead of k+1 and
+	// emitting a wrong index for every field. The property is now carried on the table itself.
+	static bool
+
 	// byNameValue maps a HeaderField name/value pair to the unique id of the newest
 	// entry with the same name and value. See above for a definition of "unique id".
 	byNameValue map[pairNameValue]uint64
@@ -119,14 +127,24 @@ func (t *headerFieldTable) idToIndex(id uint64) uint64 {
 		panic(fmt.Sprintf("id (%v) <= evictCount (%v)", id, t.evictCount))
 	}
 	k := id - t.evictCount - 1 // convert id to an index t.ents[k]
-	if t != staticTable {
+	// The `t != staticTable` half is kept deliberately: upstream's TestHeaderFieldTable_Search
+	// simulates a static table by temporarily REASSIGNING the global staticTable pointer to its own
+	// table, so dropping the pointer check would silently reclassify that table as dynamic and
+	// change what upstream's own test measures.
+	if !t.static && t != staticTable {
 		return uint64(t.len()) - k // dynamic table
 	}
 	return k + 1
 }
 
 // http://tools.ietf.org/html/draft-ietf-httpbis-header-compression-07#appendix-B
-var staticTable = newStaticTable()
+// staticTable resolves a duplicated NAME to its FIRST entry. It stays the package default because
+// the decoder and every name+value lookup use it and are indifferent to the choice.
+var staticTable = newStaticTable(false)
+
+// staticTableLastMatch resolves a duplicated NAME to its LAST entry — upstream's behaviour, and
+// Firefox's. Selected per-Encoder by SetStaticNameIndexPolicy.
+var staticTableLastMatch = newStaticTable(true)
 var staticTableEntries = [...]HeaderField{
 	{Name: ":authority"},
 	{Name: ":method", Value: "GET"},
@@ -191,32 +209,43 @@ var staticTableEntries = [...]HeaderField{
 	{Name: "www-authenticate"},
 }
 
-func newStaticTable() *headerFieldTable {
+func newStaticTable(lastMatch bool) *headerFieldTable {
 	t := &headerFieldTable{}
 	t.init()
+	t.static = true
 	for _, e := range staticTableEntries[:] {
 		t.addEntry(e)
 	}
-	// [SIGHTGLASS PATCH] The STATIC table's name index resolves to the FIRST entry with a given
-	// name, not the last.
+	// [SIGHTGLASS PATCH] WHICH static entry a duplicated NAME resolves to is a per-engine choice, so
+	// it is a parameter here rather than a constant.
 	//
-	// addEntry writes byName[name] unconditionally, so for a name that appears more than once the
-	// highest index wins: ":path" resolves to 5 (`/index.html`) rather than 4 (`/`), and ":method"
-	// to 3 (POST) rather than 2 (GET). That choice is invisible for a name+value hit, but it is on
-	// the wire for every literal-with-indexed-name: the encoder emits the index it was given.
+	// addEntry writes byName[name] unconditionally, so upstream's table resolves a repeated name to
+	// the HIGHEST index — ":path" to 5 (`/index.html`) rather than 4 (`/`), ":method" to 3 (POST)
+	// rather than 2 (GET). That is invisible for a name+value hit but it is ON THE WIRE for every
+	// literal-with-indexed-name: the encoder emits the index it was given.
 	//
-	// Real Chrome 153 uses the first: it emits :path with name index 4 and a literal :method with
-	// name index 2, on 114 :path and 8 :method observations across both captures, with zero
-	// exceptions. Measured, not assumed.
+	// Both choices are real, and an earlier revision of this patch hardcoded the first because that
+	// is what Chrome does — which put ONE BROWSER'S IDENTITY into the stack as a constant:
 	//
-	// Only the static table is rebuilt. The DYNAMIC table must keep most-recent-wins, because its
-	// indices shift as entries are evicted and the newest entry is the one an encoder can rely on.
-	first := make(map[string]uint64, len(t.byName))
-	for k := len(t.ents) - 1; k >= 0; k-- {
-		first[t.ents[k].Name] = uint64(k) + 1
-	}
-	for name, idx := range first {
-		t.byName[name] = idx
+	//   Chrome 153  FIRST match: :path name index 4, :method name index 2. 114 :path and 8 :method
+	//               observations across two captures, zero exceptions.
+	//   Firefox 156 LAST  match: :path name index 5 (leading byte 0x05 = literal-without-indexing,
+	//               4-bit name index 5, where a first-match encoder emits 0x04). 41 of 41 attributed
+	//               HEADERS blocks, confirmed independently by the tshark HPACK dissector.
+	//
+	// Only byName differs between the two; ents and byNameValue are identical, so a name+value hit
+	// is unaffected and DECODING is unaffected (hpack.go indexes ents positionally).
+	//
+	// The DYNAMIC table always keeps most-recent-wins, because its indices shift as entries are
+	// evicted and the newest entry is the one an encoder can rely on.
+	if !lastMatch {
+		first := make(map[string]uint64, len(t.byName))
+		for k := len(t.ents) - 1; k >= 0; k-- {
+			first[t.ents[k].Name] = uint64(k) + 1
+		}
+		for name, idx := range first {
+			t.byName[name] = idx
+		}
 	}
 	return t
 }

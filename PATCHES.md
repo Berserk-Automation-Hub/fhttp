@@ -737,3 +737,68 @@ before (v0.6.9-sightglass.5): 33 failing
 after:                        33 failing
 NEW failures: none
 ```
+
+## Patch 10 — the HPACK static NAME index was one browser's identity, hardcoded
+
+### The defect
+
+RFC 7541 Appendix A gives four header names more than one static entry: `:method` (2 GET, 3 POST),
+`:path` (4 `/`, 5 `/index.html`), `:scheme` (6 http, 7 https) and `:status`. When an encoder spells a
+field out but cites its NAME by index — a literal with an indexed name — it emits whichever entry it
+resolved to. That choice is invisible for a name+value hit and **on the wire** for every other
+occurrence, one byte per field.
+
+Upstream resolves a duplicated name to the **highest** index, because `addEntry` writes
+`byName[name]` unconditionally. An earlier Sightglass patch rebuilt the static table to resolve to
+the **lowest** instead, because that is what Chrome does. It was measured and it was right about
+Chrome — and it was still wrong, because it put **one browser's identity into the stack as a
+constant**. A Firefox profile driving this fork emitted Chrome's index and could not be corrected
+from the profile, which is the failure the profile-driven design exists to prevent.
+
+Both behaviours are real, and both are measured:
+
+| engine | policy | `:path` | `:method` | evidence |
+|---|---|---|---|---|
+| Chrome 153 | first match | 4 | 2 | 114 `:path` + 8 `:method` observations, two captures, zero exceptions |
+| Firefox 156 | last match | 5 | 3 | 41 of 41 attributed HEADERS blocks; leading byte `0x05` where a first-match encoder emits `0x04`; confirmed independently by the tshark HPACK dissector |
+
+### The fix
+
+`newStaticTable(lastMatch bool)` builds both variants; `staticTable` keeps first-match and
+`staticTableLastMatch` is upstream's. `Encoder.SetStaticNameIndexPolicy(bool)` selects per encoder,
+mirroring the existing `SetIndexingPolicy` seam, and `Transport.HPACKStaticNameLastMatch` threads it
+from the caller's profile. Only the NAME-only lookup is affected: `ents` and `byNameValue` are
+identical in both tables, so name+value hits and **all decoding** are unchanged.
+
+One trap worth recording. `idToIndex` distinguished static from dynamic by comparing against the
+single global `staticTable` **pointer**, so a second static table would have been classified dynamic
+and indexed as `len()-k` instead of `k+1` — a wrong index on every field. Tables now carry
+`static bool`. The pointer check is deliberately KEPT alongside it, because upstream's own
+`TestHeaderFieldTable_Search` simulates a static table by temporarily reassigning that global, and
+dropping it would have silently changed what upstream's test measures.
+
+### Tests
+
+`http2/hpack/static_name_index_test.go`, three tests:
+
+- **the wire byte, both ways** — `:path` with a value in neither static entry encodes with name index
+  4 under first-match and 5 under last-match, and round-trips to the same field under either, since
+  this is an encoder signature and not a protocol change.
+- **the control** — a name+value hit (`:method GET`, `:path /`) and a unique name (`:authority`,
+  `user-agent`) must encode **byte-identically** under both policies, or the patch changes more than
+  it claims.
+- **the table invariant** — the two static tables must agree on `ents` and `byNameValue`, both be
+  marked static, and differ on `byName` for exactly the duplicated names (4).
+
+Ablation: making `searchTable` ignore the policy fails the last-match case with
+`:path name index = 4, want 5`.
+
+### Verification
+
+```
+before (v0.6.9-sightglass.7): 1 failing  (TestTransportRejectsConnHeaders, pre-existing upstream)
+after:                       1 failing  (identical set)
+NEW failures: none
+```
+
+`go test ./http2/hpack/` is fully green both before and after.

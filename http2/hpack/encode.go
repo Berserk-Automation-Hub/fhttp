@@ -18,6 +18,12 @@ type Encoder struct {
 	// SetIndexingPolicy. nil means upstream behaviour.
 	indexingPolicy func(HeaderField) bool
 
+	// staticNameLastMatch selects which static table a NAME-ONLY lookup resolves against. False
+	// (the default) is first-match. Set by SetStaticNameIndexPolicy.
+	//
+	// [SIGHTGLASS PATCH] see newStaticTable: this is a per-engine wire choice, not a constant.
+	staticNameLastMatch bool
+
 	dynTab dynamicTable
 	// minSize is the minimum table size set by
 	// SetMaxDynamicTableSize after the previous Header Table Size
@@ -93,14 +99,18 @@ func (e *Encoder) WriteField(f HeaderField) error {
 // only name matches, i points to that index and nameValueMatch
 // becomes false.
 func (e *Encoder) searchTable(f HeaderField) (i uint64, nameValueMatch bool) {
-	i, nameValueMatch = staticTable.search(f)
+	st := staticTable
+	if e.staticNameLastMatch {
+		st = staticTableLastMatch
+	}
+	i, nameValueMatch = st.search(f)
 	if nameValueMatch {
 		return i, true
 	}
 
 	j, nameValueMatch := e.dynTab.table.search(f)
 	if nameValueMatch || (i == 0 && j != 0) {
-		return j + uint64(staticTable.len()), nameValueMatch
+		return j + uint64(st.len()), nameValueMatch
 	}
 
 	return i, false
@@ -268,3 +278,13 @@ func encodeTypeByte(indexing, sensitive bool) byte {
 	}
 	return 0
 }
+
+// SetStaticNameIndexPolicy selects which STATIC entry a duplicated header NAME resolves to when the
+// encoder emits a literal with an indexed name.
+//
+// [SIGHTGLASS PATCH] lastMatch=false (the default) emits Chrome's choice — :path name index 4,
+// :method 2. lastMatch=true emits upstream's, which is also Firefox's — :path 5, :method 3. The two
+// differ by one byte in every HEADERS block that spells one of those names out, so an engine cannot
+// be emulated with the wrong one. Only the NAME-only lookup is affected; name+value hits and
+// decoding are identical either way.
+func (e *Encoder) SetStaticNameIndexPolicy(lastMatch bool) { e.staticNameLastMatch = lastMatch }
