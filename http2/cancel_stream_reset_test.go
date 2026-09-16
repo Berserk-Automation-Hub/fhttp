@@ -22,9 +22,14 @@ import (
 	"time"
 )
 
-// countResetsAfterCancel sets cs.didReset to the given value, calls cancelStream(), and returns how
-// many RST_STREAM frames the peer actually received.
-func countResetsAfterCancel(t *testing.T, didReset bool) int {
+// countResetsAfterCancel sets cs.didReset to the given value, calls cancelStream(), and reports how
+// many RST_STREAM frames the peer actually received and whether the clientStream was still in
+// cc.streams when cancelStream() returned.
+//
+// The second return value is not decoration. cc.forgetStreamID sits INSIDE the same `if` as the
+// reset, so the inverted condition dropped the bookkeeping along with the frame — see
+// TestCancelStreamForgetsTheStream.
+func countResetsAfterCancel(t *testing.T, didReset bool) (int, bool) {
 	t.Helper()
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -87,6 +92,12 @@ func countResetsAfterCancel(t *testing.T, didReset bool) int {
 
 	cs.cancelStream()
 
+	// Read the map BEFORE Close(), which tears down every stream on the connection and would erase
+	// the difference this is measuring.
+	cc.mu.Lock()
+	_, stillInMap := cc.streams[cs.ID]
+	cc.mu.Unlock()
+
 	// Close the connection so the server's ReadFrame loop ends and reports what it saw.
 	_ = cc.Close()
 	select {
@@ -94,11 +105,11 @@ func countResetsAfterCancel(t *testing.T, didReset bool) int {
 		if n < 0 {
 			t.Fatal("server side failed")
 		}
-		return n
+		return n, stillInMap
 	case <-time.After(10 * time.Second):
 		t.Fatal("server never reported")
 	}
-	return 0
+	return 0, stillInMap
 }
 
 func readFull(c net.Conn, b []byte) (int, error) {
@@ -115,13 +126,39 @@ func readFull(c net.Conn, b []byte) (int, error) {
 
 func TestCancelStreamResetsOnlyWhenNotAlreadyReset(t *testing.T) {
 	// Not yet reset: cancelStream owes the peer exactly one RST_STREAM.
-	if n := countResetsAfterCancel(t, false); n != 1 {
+	if n, _ := countResetsAfterCancel(t, false); n != 1 {
 		t.Errorf("didReset=false: peer received %d RST_STREAM, want 1 — a cancelled stream that has "+
 			"not been reset must be reset once", n)
 	}
 	// Already reset: cancelStream must send NOTHING. Chrome never sends two resets on one stream.
-	if n := countResetsAfterCancel(t, true); n != 0 {
+	if n, _ := countResetsAfterCancel(t, true); n != 0 {
 		t.Errorf("didReset=true: peer received %d RST_STREAM, want 0 — the stream was already reset, "+
 			"so this is the duplicate Chrome never sends (measured 6/6 streams, one reset each)", n)
+	}
+}
+
+// TestCancelStreamForgetsTheStream pins the OTHER statement inside that `if`.
+//
+// Patch 11 originally claimed in this file's PATCHES.md entry, and in the comment on the condition
+// itself, that "no stream-map leak resulted from the old code — Close() calls forgetStreamID
+// unconditionally". That is true only of the path where the caller closes the response body. On the
+// path where the caller cancels the request CONTEXT with the body still open, Body.Close() is never
+// called, and cancelStream() is the only code that can release the stream: with the condition
+// inverted it wrote no reset AND called no forgetStreamID, so the clientStream stayed in cc.streams
+// for the life of the connection, holding its accounting and one of the connection's concurrency
+// slots.
+//
+// Measured in Sightglass through its shipped entry point (parity.TestParityHTTP2CancelledStreamsDoNotConsumeSlots):
+// with the condition inverted, 100 context-cancelled requests on one connection filled
+// ChromeInitialMaxConcurrentStreams = 100 and request 101 could not be sent on it at all. The claim
+// is corrected in PATCHES.md and in the comment, and this test is what keeps the correction honest.
+func TestCancelStreamForgetsTheStream(t *testing.T) {
+	// The cancel-before-any-reset case: cancelStream() is the only writer, so it owes the peer the
+	// reset AND owes the connection the slot.
+	if _, stillInMap := countResetsAfterCancel(t, false); stillInMap {
+		t.Errorf("didReset=false: the clientStream was still in cc.streams after cancelStream() — " +
+			"cc.forgetStreamID sits inside the same `if` as the reset, so an inverted condition " +
+			"leaks one clientStream and one concurrency slot per cancelled request, for the life " +
+			"of the connection")
 	}
 }

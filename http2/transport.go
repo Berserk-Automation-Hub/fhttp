@@ -522,9 +522,17 @@ func (cs *clientStream) cancelStream() {
 	// is trivially loggable by any origin.
 	//
 	// Negating it also restores the intent on the other branch: a cancel that arrives BEFORE any
-	// reset now sends one and forgets the stream, which is what the function is for. (No stream-map
-	// leak resulted from the old code — Close() calls forgetStreamID unconditionally — but the reset
-	// it owed the peer was never sent.)
+	// reset now sends one and forgets the stream, which is what the function is for. BOTH statements
+	// were lost, and the second one is a LEAK — an earlier version of this comment claimed no
+	// stream-map leak resulted, on the grounds that transportResponseBody.Close() calls
+	// forgetStreamID unconditionally. That is true only of the path where the caller CLOSES the
+	// body. When the caller cancels the request CONTEXT with the body still open, Close() never
+	// runs and cancelStream() is the only code that can release the stream: with the condition
+	// inverted it wrote no reset AND forgot nothing, so the clientStream stayed in cc.streams for
+	// the life of the connection, holding its accounting and one concurrency slot. Measured through
+	// Sightglass's shipped client: 100 context-cancelled requests on one connection filled
+	// ChromeInitialMaxConcurrentStreams = 100 and request 101 could not be sent on that connection
+	// at all. See TestCancelStreamForgetsTheStream.
 	if !didReset {
 		cc.writeStreamReset(cs.ID, ErrCodeCancel, nil)
 		cc.forgetStreamID(cs.ID)

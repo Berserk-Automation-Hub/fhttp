@@ -432,8 +432,29 @@ RST_STREAM(N, CANCEL)   WINDOW_UPDATE(0, unread)   RST_STREAM(N, CANCEL)
 
 Reproduced in Sightglass at **4/40, 3/40, 3/40 runs (~8-10%)**, more under CPU load.
 
-No stream-map leak resulted from the old code — `Close()` calls `forgetStreamID` unconditionally —
-so the only lost behaviour on the other branch was the reset itself.
+The second is a **leak**, and this entry originally got that wrong. It claimed "no stream-map leak
+resulted from the old code — `Close()` calls `forgetStreamID` unconditionally — so the only lost
+behaviour on the other branch was the reset itself." That is true only of the path where the caller
+**closes the response body**. `cc.forgetStreamID` sits inside the very same `if` as the reset, so on
+the path where the caller cancels the request **context** with the body still open — where
+`transportResponseBody.Close()` never runs and `cancelStream()` is the only code that can release
+the stream — the old condition wrote no reset **and** forgot nothing. The `clientStream` stayed in
+`cc.streams` for the life of the connection, holding its accounting and one of the connection's
+concurrency slots.
+
+Measured through Sightglass's shipped entry point (`parity.TestParityHTTP2CancelledStreamsDoNotConsumeSlots`,
+`NewSessionFactory -> Session.Do`): with the condition inverted, 100 context-cancelled requests on
+one connection filled `ChromeInitialMaxConcurrentStreams = 100`, and request 101 could not be sent
+on that connection at all —
+
+```
+/slot/101: Session.Do: Get "https://127.0.0.1:64343/slot/101": EOF
+Request 101 of 150 on ONE connection, after 100 requests that were cancelled by their context
+with the body still open. ... Extra connections dialled so far: 1.
+```
+
+So the old code was a wire divergence **and** an unbounded per-connection leak, and the fix closes
+both.
 
 ### The fix
 
@@ -454,7 +475,25 @@ didReset=false: peer received 0 RST_STREAM, want 1
 didReset=true:  peer received 1 RST_STREAM, want 0
 ```
 
+`TestCancelStreamForgetsTheStream`, added when the "no stream-map leak" claim above was corrected,
+pins the OTHER statement inside the same `if`: it reads `cc.streams` after `cancelStream()` returns
+and before `cc.Close()` (which tears every stream down and would erase the difference). Ablation,
+restoring the inverted condition:
+
+```
+cancel_stream_reset_test.go:159: didReset=false: the clientStream was still in cc.streams after
+cancelStream() — cc.forgetStreamID sits inside the same `if` as the reset, so an inverted condition
+leaks one clientStream and one concurrency slot per cancelled request, for the life of the connection
+--- FAIL: TestCancelStreamForgetsTheStream (0.00s)
+```
+
 ### Verification
+
+Regression diff for the correction above (the comment, the `PATCHES.md` text and
+`TestCancelStreamForgetsTheStream`; no product code changed): `GOTOOLCHAIN=auto go test ./... -count=1`,
+**41 failing before, 41 after, identical set, no new failures**. The root `fhttp` package hits the
+default 10-minute per-package timeout in both passes (601.3s before, 600.6s after), which is where
+most of that 41 comes from; it is unaffected by this change.
 
 Baseline before the fix, measured through Sightglass's own H2 census over five independent
 attempts of 40 runs each:
