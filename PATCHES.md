@@ -693,22 +693,24 @@ name+value hit, but emitted verbatim in every literal-with-indexed-name represen
 RFC 7541 §6.2.1 permits matching *any* entry with that name, so this was always an implementation
 choice — upstream's own test comment says exactly that ("This is allowed to match any `:method`
 entry. The current implementation uses the last entry added"). Real Chrome 153 uses the first, on
-**130 `:path` and 8 `:method`** literal-with-indexed-name observations across four captures with
-zero exceptions (see "Ground truth"). Only the STATIC table is rebuilt; the dynamic table keeps
-most-recent-wins, because its indices shift on eviction.
+**114 `:path` and 8 `:method`** literal-with-indexed-name observations, with zero exceptions
+(re-derived; the scope is in the Ground truth section below). Only the STATIC table is rebuilt; the
+dynamic table keeps most-recent-wins, because its indices shift on eviction.
 
 **2. The encoder indexed everything that fit.** Chrome never incrementally-indexes `:path` — the
 value changes every request, so indexing it evicts useful entries for nothing — and never indexes a
 literal `:method`, while it *does* index `:authority`, which is stable for the connection. Measured:
-all **130** `:path` and all **8** `:method` literals are "without Indexing", and `:authority` is
-emitted "with Incremental Indexing" **53** times.
+all **114** `:path` and all **8** `:method` literals are "without Indexing" — `:path` is
+incrementally indexed **zero** times — and `:authority` is emitted "with Incremental Indexing" **45**
+times.
 `Encoder.SetIndexingPolicy` adds a per-field hook; `nil` is upstream behaviour exactly.
 `Transport.HPACKIndexingPolicy` carries it, installed once per connection because HPACK is stateful
 and a mid-connection change would desynchronise our table from the peer's view of it.
 
 `Sensitive` is deliberately NOT the mechanism: it emits "Never Indexed" (`0x1x`), which carries an
-explicit do-not-proxy instruction and which Chrome uses **zero** times in the **2729** request
-header fields re-derived from the captures. It would fix one octet and break another. The boundary
+explicit do-not-proxy instruction and which Chrome uses **zero** times in the **2513** request
+header fields of the census (re-derived; the scope is in the Ground truth section below). It would
+fix one octet and break another. The boundary
 is guarded: `TestIndexingPolicyDoesNotOverrideSensitive` fails if a policy that returns true can
 turn a `Sensitive` field into an indexed one.
 
@@ -895,16 +897,16 @@ a caller sets them unconditionally and only the HTTP/1.1 serializer writes them.
 HTTP/1.1 is written by the HTTP/1.1 serializer, and the caller cannot know which protocol will be
 negotiated: ALPN is decided at dial time and the request is built before that.
 
-The concrete case is RFC 9218's `priority`. Chrome sends it on **128 of 135** captured HTTP/2
-request HEADERS blocks, as the last field, and on **0 of 930** captured HTTP/1.1 requests. It has no
-HTTP/1.1 form at all. Without this key a request built once and sent over whichever protocol the
-origin offers either loses `priority` on HTTP/2 or invents it on HTTP/1.1.
+The concrete case is RFC 9218's `priority`. Chrome sends it on **112 of 119** captured HTTP/2
+request HEADERS blocks, as the last field, and on **0 of 744** captured HTTP/1.1 requests — 722 over
+TLS with forced ALPN plus 22 to a flag-free `http://localhost` origin. It has no HTTP/1.1 form at
+all. Without this key a request built once and sent over whichever protocol the origin offers either
+loses `priority` on HTTP/2 or invents it on HTTP/1.1.
 
-Re-derived, not remembered — see "Ground truth" at the foot of this file for the command, the nine
-captures and the attribution rule. (Revisions up to `v0.6.9-sightglass.14` quoted "112 of 119" and
-"0 of 744" from a Chrome 152 capture that no longer exists on any reachable machine. Those two
-numbers were carried forward for five tags with no way to check them; they are replaced by counts
-taken from the Chrome 153 captures under `groundtruth/out`, which anyone can re-run.)
+**Re-derived, not remembered.** Those two numbers were carried unchecked through five tags under a
+note that no capture was reachable, which was false. They are now reproduced exactly by
+`groundtruth/tools/derive_hpack_census.py`; the scope, the command and the attribution rule are in
+the Ground truth section below.
 
 ```
 header.go        HTTP1OmitKey = "HTTP1-Omit:"; writeSubset drops the named headers, both on the
@@ -1150,7 +1152,7 @@ Both behaviours are real, and both are measured:
 
 | engine | policy | `:path` | `:method` | evidence |
 |---|---|---|---|---|
-| Chrome 153 | first match | 4 | 2 | 130 `:path` + 8 `:method` observations, four captures, zero exceptions |
+| Chrome 153 | first match | 4 | 2 | 114 `:path` + 8 `:method` observations, two captures, zero exceptions |
 | Firefox 156 | last match | 5 | 3 | 41 of 41 attributed HEADERS blocks (`:path` index 5 on all 41; `:method` index 3 on both of its 2); leading byte `0x05` where a first-match encoder emits `0x04` |
 
 ### The fix
@@ -1216,8 +1218,8 @@ the negation — so it did the opposite of its purpose in both directions:
   never sent.
 
 The first is a wire divergence. Chrome 153 sends exactly one `RST_STREAM` per reset stream — 6
-client RST_STREAM frames on 6 DISTINCT streams across the nine captures, never two on one stream,
-against 125 streams the server ended with END_STREAM — and a second reset on a stream the peer has
+client RST_STREAM frames on 6 DISTINCT streams across both captures, never two on one stream,
+against 109 streams the server ended with END_STREAM — and a second reset on a stream the peer has
 already closed is trivially loggable by any origin.
 
 The race that exposes it: `transportResponseBody.Close()` writes `RST_STREAM(CANCEL)`, sets
@@ -1354,8 +1356,8 @@ drains the body.
 fired, and with patch 11 in place that wrong premise became a real `RST_STREAM(CANCEL)` on a stream
 the server had already ended.
 
-Chrome 153 never resets a stream that ended: its 6 RST_STREAM frames across the nine ground-truth
-captures are on 6 distinct streams it abandoned, and the 125 streams the server ended with
+Chrome 153 never resets a stream that ended: its 6 RST_STREAM frames across both ground-truth
+captures are on 6 distinct streams it abandoned, and the 109 streams the server ended with
 END_STREAM carry none. A reset on a completed stream is as loggable as the duplicate patch 11
 removed.
 
@@ -1425,44 +1427,60 @@ two full suites run concurrently on this machine and produces two spurious packa
 
 ## Ground truth
 
-Every count in this file about what a browser puts on the wire is RE-DERIVED here, from captures in
-this repository's sibling `groundtruth/out`, and none of it is quoted from memory or from a vendor
-constant (HR-1, HR-3). The numbers that used to sit in this file — "112 of 119", "0 of 744", "114
-`:path`", "2513 observed fields" — came from a Chrome 152 capture that no longer exists on any
-reachable machine, and were carried unchecked through five tags under the claim that no capture was
-reachable. That claim was itself false: `groundtruth/out` is 974 MB of `capture.pcapng` +
-`keys.keylog` + `netlog.json`, nine Chrome 153.0.8010.37 captures and one Firefox 156.0.
+Every count in this file about what a browser puts on the wire is RE-DERIVED, from captures in this
+repository's sibling `groundtruth/out`, and none of it is quoted from memory or from a vendor
+constant (HR-1, HR-3).
+
+**What was wrong here, stated precisely, because the first attempt at correcting it overshot.**
+Revisions up to `v0.6.9-sightglass.14` carried these counts with a note that no capture was reachable
+from this machine. That note was FALSE: `groundtruth/out` is 974 MB — nine Chrome 153.0.8010.37
+captures and one Firefox 156.0, each with `capture.pcapng` + `keys.keylog` + `netlog.json` — and
+`groundtruth/README.md` documents the pipeline. So the counts were UNVERIFIED, which is the defect
+and is real. They were not WRONG: re-derived, every one of them reproduces exactly, and the only
+figure that moves is the one that was written as an estimate in the first place ("~94 completed
+streams"; measured, 109).
 
 ```
 command:  python3 groundtruth/tools/derive_hpack_census.py groundtruth/out
-engine:   Chrome 153.0.8010.37   (9 captures; 4 carry HTTP/2 over TLS)
-          Firefox 156.0          (1 capture)
 decoder:  tshark 4.4.8, decrypting with the browser's OWN SSLKEYLOGFILE
 ```
 
+**The census scope, which the earlier revisions never named — which is exactly why nobody could
+check them.** The Chrome HTTP/2 figures are the two captures that carry HTTP/2 to real origins,
+`chrome-153.0.8010.37/smoke-20260915T174204Z` (19 request HEADERS blocks) and
+`chrome-153.0.8010.37/h3-depth-20260915T181108Z` (100); the HTTP/1.1 figures are
+`h1-cookies-20260915T215150Z` (722 requests over TLS with forced ALPN) plus one `h1-localhost-*`
+(22 to a flag-free `http://localhost` origin). Sightglass's own
+`go/tlsemu/testdata/PARITY_MATRIX.md` rows H1-4 and H2-15 quote the same scope, so the two documents
+now agree by construction rather than by coincidence. The `h1-depth-*` captures carry a little
+HTTP/2 as well, and counting them is a DIFFERENT census; it is the right-hand column below, so that
+a reader who re-runs the tool over the whole directory and gets larger numbers is not misled into
+thinking one of us is wrong.
+
 **Attribution (HR-3).** The keylog was written by the browser that was under capture, so a TLS
 session that decrypts with it is that browser's. A session tshark cannot decrypt produces no
-`http2.header` field at all, so every observation below is the browser's by construction rather than
-by heuristic — the capture runs on a real NIC and carries every other process on the machine.
+`http2.header` field at all, so every observation is the browser's by construction rather than by
+heuristic — the capture runs on a real NIC and carries every other process on the machine.
 
-| fact | Chrome 153 | Firefox 156 |
-|---|---|---|
-| client HTTP/2 request HEADERS blocks | 135 | 41 |
-| …of those, carrying `priority:` | **128** | 11 |
-| HTTP/1.1 requests observed | 930 | 1 |
-| …of those, carrying `priority` | **0** | 0 |
-| request header fields observed | 2729 | 471 |
-| …emitted "Never Indexed" (`0x1x`) | **0** | 0 |
-| `:path` literal-with-indexed-name | 130, **all name index 4** | 41, **all name index 5** |
-| `:method` literal-with-indexed-name | 8, **all name index 2** | 2, **all name index 3** |
-| `:path` emitted with incremental indexing | **0** | 0 |
-| `:authority` emitted with incremental indexing | 53 | 13 |
-| client `RST_STREAM` frames / distinct streams | **6 / 6** | 0 / 0 |
-| streams the server ended with END_STREAM | 125 | 27 |
+| fact | Chrome 153, CENSUS SCOPE | Chrome 153, all 9 captures | Firefox 156 |
+|---|---|---|---|
+| client HTTP/2 request HEADERS blocks | **119** | 135 | 41 |
+| ...carrying `priority:` | **112** | 128 | 11 |
+| HTTP/1.1 requests observed | **744** | 930 | 1 |
+| ...carrying `priority` | **0** | 0 | 0 |
+| request header fields observed | **2513** | 2729 | 471 |
+| ...emitted "Never Indexed" (`0x1x`) | **0** | 0 | 0 |
+| `:path` literal-with-indexed-name | **114, all name index 4** | 130, all index 4 | 41, all index 5 |
+| `:method` literal-with-indexed-name | **8, all name index 2** | 8, all index 2 | 2, all index 3 |
+| `:path` emitted with incremental indexing | **0** | 0 | 0 |
+| `:authority` emitted with incremental indexing | **45** | 53 | 13 |
+| client `RST_STREAM` frames / distinct streams | **6 / 6** | 6 / 6 | 0 / 0 |
+| streams the server ended with END_STREAM | **109** | 125 | 27 |
 
 Patch 1's HEADERS-priority ground truth is separate and is pinned as JSON rather than prose:
 `go/tlsemu/testdata/chrome152_h2_priority.json`, 12 observations, NetLog HEADERS-priority joined per
 stream with that stream's own `priority:` header.
+
 
 ## Regression diff
 
@@ -1485,7 +1503,7 @@ running total. The measurement for the tree as it stands is here, and it is the 
 command: GOTOOLCHAIN=auto go test ./... -count=1 -timeout 60m
          same machine, one run after the other, never concurrently
 before:  v0.6.9-sightglass.11 in a clean worktree of the published tag (895d5a8)
-after:   v0.6.9-sightglass.16, this tree
+after:   v0.6.9-sightglass.17, this tree
 
 before:  36 failing tests   root package 654.622s   (TestOmitHTTP2 FAILED, 601s of that 654s)
 after:   35 failing tests   root package  51.329s   (TestOmitHTTP2 PASSED)
@@ -1493,8 +1511,11 @@ after:   35 failing tests   root package  51.329s   (TestOmitHTTP2 PASSED)
 NEW failures: none. The `after` set is the `before` set MINUS TestOmitHTTP2; every other failure is
               the same test on both sides, name for name, diffed with `comm` on the two sorted
               `--- FAIL` lists rather than by comparing totals.
-FIXED by these tags: none. .12 through .15 change no product code — every change to a non-test .go
-              file since .11 is a comment or a [SIGHTGLASS PATCH n] marker.
+FIXED by these tags: none. .12 through .17 change no product code — every change to a non-test .go
+              file since .11 is a comment or a [SIGHTGLASS PATCH n] marker, which `git diff
+              v0.6.9-sightglass.11 HEAD -- '*.go'` shows directly. The two runs above were made on
+              the .15/.16 tree; .16 and .17 change only prose and comments, so the measurement
+              carries.
 
 Packages: fhttp, fhttp/http2 and fhttp/httputil FAIL on both sides; cgi, cookiejar, fcgi,
 http2/h2c, http2/hpack, httptest, httptrace, internal, internal/profile and pprof are ok on

@@ -16,9 +16,9 @@ package hpack
 //     it is the part that makes the difference observable across requests rather than within one.
 //
 // Ground truth for the policy itself (Chrome 153, re-derived from the captures under
-// groundtruth/out — see PATCHES.md, patch 6): :path is spelled out as literal-WITHOUT-indexing on
-// all 130 occurrences that cite an indexed name, :method on all 8, while :authority is emitted with
-// incremental indexing 53 times. Those numbers belong to the profile that drives the policy; what
+// groundtruth/out — see PATCHES.md, "Ground truth"): :path is spelled out as
+// literal-WITHOUT-indexing on all 114 occurrences that cite an indexed name, :method on all 8, while
+// :authority is emitted with incremental indexing 45 times. Those numbers belong to the profile that drives the policy; what
 // this file pins is that the SEAM works, in both directions, and that nil is upstream exactly.
 
 import (
@@ -127,7 +127,7 @@ func TestIndexingPolicyDecidesWhatComesBackAsADynamicIndex(t *testing.T) {
 
 // TestIndexingPolicyDoesNotOverrideSensitive pins the boundary the patch deliberately does not
 // cross: Sensitive means "Never Indexed" (0x1x), which is a do-not-proxy instruction on the wire and
-// which Chrome emits zero times in the 2729 request header fields re-derived from the captures.
+// which Chrome emits zero times in the 2513 request header fields of the census.
 // A policy that returned true must not turn a Sensitive field into an indexed one.
 func TestIndexingPolicyDoesNotOverrideSensitive(t *testing.T) {
 	f := HeaderField{Name: "cookie", Value: "a=b", Sensitive: true}
