@@ -49,7 +49,7 @@ retraction nobody can grep for is not a retraction), and every appearance must s
 conditions: it is QUOTED, not stated; a RETRACTED / FALSE / HARMFUL marker sits within 150 bytes of
 it; and a phrase out of THAT claim's own correction sits within 400. The second and third conditions
 were added in `v0.6.9-sightglass.18` because marker-presence alone was not a guard. Those 3
-markers occur 38 times in this file, so an adversarial reader re-asserted the stream-map
+markers occur 41 times in this file, so an adversarial reader re-asserted the stream-map
 sentence below verbatim in a paragraph whose only nearby marker retracted the BASE VERSION, and
 every doc guard this file carried at `v0.6.9-sightglass.17` — fourteen of them — stayed green.
 Proximity is not association, and a retraction quotes the published sentence rather than asserting
@@ -1365,20 +1365,48 @@ RETRACTED "stream-map leak" sentence above never had:
     cancel_stream_reset_test.go:370: didReset=false: cc.idleTimer never fired after cancelStream() emptied cc.streams, although the harness armed it with a 25ms idleTimeout and waited 2s.
 ```
 
-**RETRACTED, FALSE — the ablation record this entry published for ablation 2.** `v0.6.9-sightglass.9`
-through `.18` printed it as a single error at line 161 of `cancel_stream_reset_test.go`. Two things
-were wrong with that: the assertion had moved, and `.18` had added a second error arm the block
-never showed. Nobody could reproduce the text as published.
-`TestPatchesMDCitesNoLineNumbersIntoThisTree` waved it through because 161 was still *inside* the
-file — its fenced-block exemption doing exactly what its own comment warns about — so
-`TestPatchesMDQuotedAblationOutputIsReproducible` now requires every quoted `file.go:NNN:` in this
-document to land on a testing call that really prints the quoted text.
+**RETRACTED, FALSE — the ablation record this entry published for ablation 2.** It was published as
+ONE error line, cited by line number, and the citation went stale under it:
+`v0.6.9-sightglass.11` through `.14` cited line 159 of `cancel_stream_reset_test.go`, and
+`v0.6.9-sightglass.15` through `.18` cited line 161 of `cancel_stream_reset_test.go`. Each was TRUE when it was written — at `.11` line 159 and at `.15`
+line 161 really are that `t.Errorf` — and the record went wrong at `.18`, in two ways at once: line
+161 there belongs to a DIFFERENT assertion's message, and `.18` had added a second error arm,
+`cs.done was still OPEN`, that the block never showed. The last published revision of this record is
+therefore the text of a run nobody can reproduce, which is exactly what an ablation record must not
+be. `TestPatchesMDCitesNoLineNumbersIntoThisTree` waved it through because 161 was still *inside*
+the file — its fenced-block exemption doing exactly what its own comment warns about. Two guards
+replace that: `TestPatchesMDQuotedAblationOutputIsReproducible` requires every quoted `file.go:NNN:`
+in this document to land on a testing call that really prints the quoted text, and
+`TestPatchesMDTagCitationHistoryIsTrue` reads the tag ranges in THIS paragraph back out of
+`git show <tag>:PATCHES.md`, so a sentence about what an old tag published cannot be written from
+memory.
+
+**RETRACTED, FALSE — and the retraction above got it wrong in its turn.**
+`v0.6.9-sightglass.19` published this very paragraph saying the record had been printed at line 161
+ever since `.9`. It had not: `.9` and `.10` carry no such citation at all, and `.11` to `.14` carry
+159. That is a false sentence about published artefacts written INSIDE the correction of a false
+sentence about a published artefact, which is this document's recurring defect exactly, and it is
+why the check above exists rather than a fifteenth careful reading.
+`TestPatchesMDTagCitationHistoryIsTrue` is RED on the `.19` wording and green on this one.
 
 **Ablation 3 — replace `cc.forgetStreamID(cs.ID)` with `cc.mu.Lock(); delete(cc.streams, cs.ID);
-cc.mu.Unlock()`.** An adversarial reader wrote this: the slot really is freed, so a map-only guard
-passes and so does the Sightglass parity guard that counts free concurrency slots. Output is
-identical to ablation 2's, because deleting the entry by hand is exactly what dropping the call did
-to the map.
+cc.mu.Unlock()`.** An adversarial reader wrote this: the slot really IS freed, so a map-only guard
+passes and so does the Sightglass parity guard that counts free concurrency slots. Its output is
+ablation 2's MINUS the `:306` arm — five errors, not six — and that missing arm is the whole point:
+`stillInMap` is the one assertion this mutation satisfies, and at `v0.6.9-sightglass.17` it was the
+only assertion there was.
+
+```
+--- FAIL: TestCancelStreamForgetsTheStream (2.00s)
+    cancel_stream_reset_test.go:316: didReset=false: cs.done was still OPEN after cancelStream()
+    returned. Releasing the stream means cc.forgetStreamID, which closes cs.done and broadcasts on
+    cc.cond as well as deleting the map entry
+--- FAIL: TestCancelStreamWakesTheSlotWaiter (4.00s)
+    cancel_stream_reset_test.go:347: didReset=false: a goroutine parked in cc.cond.Wait() waiting for a concurrency slot was NEVER WOKEN within 2s after cancelStream() released the stream.
+    cancel_stream_reset_test.go:357: didReset=false: cc.lastActive was still the zero time after cancelStream().
+    cancel_stream_reset_test.go:364: didReset=false: cc.lastIdle was still the zero time after cancelStream() emptied cc.streams.
+    cancel_stream_reset_test.go:370: didReset=false: cc.idleTimer never fired after cancelStream() emptied cc.streams, although the harness armed it with a 25ms idleTimeout and waited 2s.
+```
 
 **Ablation 4 — replace it with a partial that does MORE**, and still not everything:
 
@@ -1640,39 +1668,49 @@ running total. The measurement for the tree as it stands is here, and it is the 
 command: GOTOOLCHAIN=auto go test ./... -count=1 -timeout 60m
          same machine, one run after the other, never concurrently
 before:  v0.6.9-sightglass.18 in a clean worktree of the published tag (2d9f1b6)
-after:   v0.6.9-sightglass.19, this tree
+after:   v0.6.9-sightglass.20, this tree
+         (v0.6.9-sightglass.19 is a same-session intermediate, superseded within the hour and
+          skipped deliberately: its PATCHES.md got the RETRACTED paragraph above wrong, which is
+          retracted there and is what TestPatchesMDTagCitationHistoryIsTrue now prevents. The pair
+          below therefore spans everything this session changed, not half of it.)
 
-before:  36 failing tests   root package 664.423s   whole run 665.58s wall
-after:   35 failing tests   root package  54.134s   whole run  99.96s wall
+before:  36 failing tests   root package 654.326s   whole run 655.56s wall
+after:   36 failing tests   root package 655.518s   whole run 656.66s wall
 
-              Each side was measured TWICE, on different occasions in the same session, and each
-              side's sorted `--- FAIL` list is IDENTICAL to its own other run — 36 names both times
-              on the before side, 35 names both times on the after side. The numbers above are the
-              second pair, run one after the other with a 150s gap.
+              This pair was measured in one session, one run after the other, with a 150s gap so
+              the ephemeral port range recovered between them, and nothing else running. The
+              before side was additionally run twice more earlier in the same session (654.018s
+              and 664.423s): all THREE runs of v0.6.9-sightglass.18 produce the IDENTICAL sorted
+              `--- FAIL` list of 36 names, so the baseline is reproducible, not a snapshot.
 
-NEW failures: NONE. The lists are diffed as LISTS, never as totals: `comm -13 before after` is
-              EMPTY on both pairings.
-              `comm -23` is ONE name, TestOmitHTTP2, and it is not this fork's to fail. Two
-              independent facts say so, and neither is an opinion about load:
-                (1) `git diff v0.6.9-sightglass.18 HEAD -- '*.go' ':!*_test.go'` is EMPTY. This tag
-                    changes no product code at all; it adds one test and rewrites prose.
+NEW failures: NONE, and this pair says more than "no new ones". The two sorted `--- FAIL` lists
+              are IDENTICAL — 36 names on each side, `comm -13` AND `comm -23` both empty — rather
+              than one being a subset of the other. Diffed as lists, never as totals. See
+              "Packages" below for the per-package split and the skip/build-failure check.
+
+              AN EARLIER PAIR IN THE SAME SESSION DID NOT MATCH, and the difference is worth
+              recording because the totals are what tempt a reader to conclude something false.
+              A run of this tree that lands in the FAST root-package regime reports 35, not 36,
+              and the missing name is TestOmitHTTP2. It is not this tag's to fail:
+                (1) `git diff v0.6.9-sightglass.18 HEAD -- '*.go' ':!*_test.go'` is EMPTY. Nothing
+                    since .18 touches product code; .19 and .20 add tests and rewrite prose.
                 (2) TestOmitHTTP2's body is
                     `exec.Command(goTool, "test", "-short", "-tags=nethttpomithttp2", "net/http")`.
                     It runs the STANDARD LIBRARY's net/http suite in a subprocess. Nothing in this
                     tree is an input to it.
-              Run alone rather than after the rest of the root package, it PASSES on BOTH sides:
-              `go test . -run '^TestOmitHTTP2$' -count=1` is `ok 1.765s` at
-              v0.6.9-sightglass.18 and `ok 1.689s` here. It fails only as the last act of a full
-              root-package run, when that run has exhausted the ephemeral port range — the
-              subprocess reports `dial tcp 127.0.0.1:59583: connect: can't assign requested
-              address` and then sits until its own 10-minute timeout, which is where the 664s root
-              package comes from. That is an INTERACTION with the suite around it, the same class
-              as the TestMissingStatusNoPanic outcome recorded below, and it is why this block
-              diffs names instead of counting them.
-FIXED by these tags: none. .12 through .19 change no product code — every change to a non-test .go
+              Run alone rather than as the last act of a full root-package run, it PASSES on both
+              sides: `go test . -run '^TestOmitHTTP2$' -count=1` is `ok 1.765s` at
+              v0.6.9-sightglass.18 and `ok 1.689s` on this tree. It fails only when the run before
+              it has exhausted the ephemeral port range — the subprocess reports `dial tcp
+              127.0.0.1:59583: connect: can't assign requested address` and then sits until its own
+              10-minute timeout, which is where a 655s root package comes from. That is an
+              INTERACTION with the suite around it, the same class as the TestMissingStatusNoPanic
+              outcome recorded below, and it is why this block diffs names instead of counting
+              them.
+FIXED by these tags: none. .12 through .20 change no product code — every change to a non-test .go
               file since .11 is a comment or a [SIGHTGLASS PATCH n] marker, which `git diff
-              v0.6.9-sightglass.11 HEAD -- '*.go' ':!*_test.go'` shows directly, and for .19 alone
-              that diff is empty.
+              v0.6.9-sightglass.11 HEAD -- '*.go' ':!*_test.go'` shows directly, and for .19 and
+              .20 that diff is empty.
 
 Packages: fhttp, fhttp/http2 and fhttp/httputil FAIL on both sides; cgi, cookiejar, fcgi,
 http2/h2c, http2/hpack, httptest, httptrace, internal, internal/profile and pprof are ok on

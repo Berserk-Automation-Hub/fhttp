@@ -1645,6 +1645,82 @@ func TestPatchesMDQuotedAblationOutputIsReproducible(t *testing.T) {
 	}
 }
 
+// tagCitationRE reads a sentence of the form
+//
+//	`v0.6.9-sightglass.11` through `.14` cited line 159 of `cancel_stream_reset_test.go`
+//
+// i.e. a claim about what a RANGE of published tags said.
+var tagCitationRE = regexp.MustCompile(
+	"`(v[0-9.]+-sightglass\\.(\\d+))` through `\\.(\\d+)` cited line (\\d+) of `([A-Za-z0-9_./]+\\.go)`")
+
+// TestPatchesMDTagCitationHistoryIsTrue checks what this file says about what OLDER TAGS published.
+//
+// A retraction has to say which revisions carried the retracted text, or a reader cannot tell which
+// published artefact is wrong. That sentence is prose about immutable objects, so nothing stops it
+// being written from memory — and the first attempt at it was: it said tags .9 through .18 all
+// printed the patch-11 ablation at line 161, when .9 and .10 printed no citation at all, .11 through
+// .14 printed 159, and only .15 through .18 printed 161. A false statement about which tag was wrong,
+// inside the correction of a tag that was wrong, is the recurring defect of this whole document.
+//
+// Published tags cannot change, so this is decidable: read each named tag's PATCHES.md back out of
+// git and require it to contain the citation the sentence attributes to it.
+func TestPatchesMDTagCitationHistoryIsTrue(t *testing.T) {
+	doc := patchesDoc(t)
+	flat := strings.Join(strings.Fields(doc), " ")
+	claims := tagCitationRE.FindAllStringSubmatch(flat, -1)
+	if len(claims) == 0 {
+		t.Fatal("PATCHES.md no longer says which published tags carried the retracted ablation " +
+			"citation. A retraction that does not name the artefacts it retracts cannot be acted on by " +
+			"anyone holding one of them.")
+	}
+	// The guard ON this guard. The first version of the sentence wrote its second half as
+	// "and `.15` through `.18` cited line 161" — a range whose first element is an abbreviation, which
+	// tagCitationRE does not match, so HALF the claim went unchecked and the test was green on a
+	// deliberately wrong second half. Every "cited line" in this file has to be in the checkable form.
+	if said := strings.Count(flat, "cited line "); said != len(claims) {
+		t.Errorf("PATCHES.md makes %d claim(s) of the form \"... cited line N ...\" but only %d of them "+
+			"are in the form this guard can read, which is\n"+
+			"  `<full tag>` through `.<n>` cited line <N> of `<file>`\n"+
+			"An abbreviated first element (\"`.15` through `.18`\") is not checkable, and an unchecked "+
+			"half of a sentence is where the false half lived last time.", said, len(claims))
+	}
+	if !gitHere() {
+		t.Skipf("the %d tag-range claim(s) in the retraction paragraph are checked with "+
+			"`git show <tag>:PATCHES.md`, and this copy of the module is not a git checkout. Every other "+
+			"check in this file still ran.", len(claims))
+	}
+	for _, c := range claims {
+		firstTag, lo, hi, line, file := c[1], c[2], c[3], c[4], c[5]
+		prefix := strings.TrimSuffix(firstTag, lo)
+		loN, _ := strconv.Atoi(lo)
+		hiN, _ := strconv.Atoi(hi)
+		if hiN < loN {
+			t.Errorf("PATCHES.md claims the range %s through .%s, which runs backwards", firstTag, hi)
+			continue
+		}
+		for n := loN; n <= hiN; n++ {
+			tag := prefix + strconv.Itoa(n)
+			out, err := exec.Command("git", "show", tag+":"+patchesFile).Output()
+			if err != nil {
+				t.Errorf("PATCHES.md says tag %s cited %s:%s, and that tag's %s cannot be read: %v. "+
+					"A claim about a published tag is only checkable while the tag is here.",
+					tag, file, line, patchesFile, err)
+				continue
+			}
+			want := file + ":" + line
+			if !strings.Contains(string(out), want) {
+				var got []string
+				for _, m := range regexp.MustCompile(regexp.QuoteMeta(file)+`:(\d+)`).FindAllStringSubmatch(string(out), -1) {
+					got = append(got, m[0])
+				}
+				t.Errorf("PATCHES.md says %s cited %q, and it does not. That tag's %s cites %v.\n"+
+					"Published tags are immutable, so a sentence about what one of them said is a fact "+
+					"with an answer, not a recollection.", tag, want, patchesFile, unique(got))
+			}
+		}
+	}
+}
+
 // TestSightglassProseReferencesDocsThatExist pins the other half of the same defect:
 // http2/chrome_concurrency.go told the reader to "see FHTTP_LAYER_PATCH.md, patch 3", and no file of
 // that name has ever existed in this tree.
