@@ -35,19 +35,31 @@ manifest, each against the patch that made it necessary.
 
 **RETRACTED CLAIMS.** Published tags cannot be edited, so the corrections live here, each beside the
 sentence it corrects. `patches_doc_test.go` pins every one of them: the claim must still appear (a
-retraction nobody can grep for is not a retraction), and every appearance must carry a RETRACTED /
-FALSE / HARMFUL marker within 400 bytes of it.
+retraction nobody can grep for is not a retraction), and every appearance must satisfy THREE
+conditions: it is QUOTED, not stated; a RETRACTED / FALSE / HARMFUL marker sits within 150 bytes of
+it; and a phrase out of THAT claim's own correction sits within 400. The second and third conditions
+were added in `v0.6.9-sightglass.18` because marker-presence alone was not a guard. Those four
+markers occur thirty-odd times in this file, so an adversarial reader re-asserted the stream-map
+sentence below verbatim in a paragraph whose only nearby marker retracted the BASE VERSION, and
+every doc guard this file carried at `v0.6.9-sightglass.17` — fourteen of them — stayed green.
+Proximity is not association, and a retraction quotes the published sentence rather than asserting
+it.
 
-* **RETRACTED, FALSE** — "the base is v0.6.8". It is v0.6.9, commit `a8b1417`; v0.6.8 is `ecfe905`,
-  one release earlier. Verified against `git ls-remote --tags https://github.com/bogdanfinn/fhttp`.
+* **RETRACTED, FALSE** — "the base is v0.6.8". It is v0.6.9, commit `a8b1417`; the tag "v0.6.8" is
+  `ecfe905`, one release earlier — a different commit, not a different spelling of this one.
+  Verified against `git ls-remote --tags https://github.com/bogdanfinn/fhttp`.
 * **RETRACTED, FALSE** — "vendored here and wired in with `replace github.com/bogdanfinn/fhttp` =>
   `./third_party/fhttp`". There is no such directive and no such directory, and the rule forbids
   both.
 * **RETRACTED, FALSE** — "stripped of `*_test.go`, `export_test.go` and `testdata/` … 0 test files".
-  The tree carries 81, and the retained upstream suite is what found patch 4b.
+  The tree carries 82, and the retained upstream suite is what found patch 4b. (Revisions up to
+  `v0.6.9-sightglass.17` said 81 HERE while the front matter above said 82, and the false string was
+  additionally hard-coded in `patches_doc_test.go`: a retraction section correcting a false count
+  with a false count. Every statement of the count in this file is now swept, not just the first.)
 * **RETRACTED, HARMFUL** — the `## Maintenance` instruction to "re-copy upstream", and its
-  instruction to "strip tests". The line above was a false description; this was an instruction to
-  delete the suite that catches the defects. See `## Maintenance` at the end of this file.
+  instruction to "strip tests". A re-copy reverts the rewritten module path and the tree stops
+  compiling; HARMFUL too, "strip tests" would delete the suite that catches the defects —
+  Upstream's 73 test files are KEPT. See `## Maintenance` at the end of this file.
 
 ## Files touched
 
@@ -72,10 +84,16 @@ A  transport_deflate_leak_test.go          patch 7   guard
 A  patches_doc_test.go                     —         guard on THIS FILE
 ```
 
-Two product files and ten guards. Seven are new with the patch they guard; `patches_doc_test.go`
-guards this document — it re-derives the base commit, the manifest above,
-the patch numbers, the guard names and the test-file count from the tree, and fails naming the
-sentence that stopped being true. None of them existed upstream.
+Two product files and nine guards. Eight are new with the patch they guard — one each for patches 7,
+8, 8b, 9, 10, 11 and 12, plus `http2/hpack/indexing_policy_test.go` for patch 6's indexing half — and
+the ninth, `patches_doc_test.go`, guards this document rather than a numbered patch: it re-derives
+the base commit, the manifest above, the patch numbers, the guard names, the marker counts and the
+test-file count from the tree, and fails naming the sentence that stopped being true. That is also
+why it is the one added guard carrying no `[SIGHTGLASS PATCH n]` marker. None of them existed
+upstream. (Revisions up to `v0.6.9-sightglass.17` said "ten guards. Seven are new"; the count was
+correct at eight guards / seven new before `indexing_policy_test.go` landed and was incremented on
+the wrong side of the sentence. `patches_doc_test.go` now derives both numbers from the ADDED
+manifest and the markers.)
 
 ### Modified, with changes of their own (16)
 
@@ -117,7 +135,8 @@ next upstream merge.
 **How much of this table is machine-checked, exactly.** The sentence that used to stand here —
 "a guard cannot be cited into existence" — was FALSE, and an adversarial reader proved it by adding
 the row `| 3 | http2/chrome_concurrency_test.go | parity.TestParityThisGuardWasNeverWritten |`, in
-which neither the file nor the test exists, and watching all ten guards stay green. Two holes: the
+which neither the file nor the test exists, and watching every doc guard of the day — ten, at
+`v0.6.9-sightglass.13` — stay green. Two holes: the
 fork-side FILE names were never checked at all, and any name spelled `parity.X` was whitelisted
 unconditionally because the fork has no view of Sightglass. Both are closed, in the two places that
 can see the two halves:
@@ -757,15 +776,23 @@ green the moment the patch is restored.
 
 ### Coverage, before and after
 
-`Encoder.SetIndexingPolicy` is a function this fork ADDED and no fork test had ever executed. Measured
-with `go test ./http2/hpack/ -coverprofile`:
+`Encoder.SetIndexingPolicy` is a function this fork ADDED and no fork test had ever executed.
 
 ```
-                             before (.14)   after (.15)
+before:  git worktree add /tmp/fh14 v0.6.9-sightglass.14 && cd /tmp/fh14 &&
+         GOTOOLCHAIN=auto go test ./http2/hpack/ -coverprofile=/tmp/before.out -count=1
+after:   GOTOOLCHAIN=auto go test ./http2/hpack/ -coverprofile=/tmp/after.out -count=1
+
+                             before (.14)   after (.15+)
 SetIndexingPolicy               0.0%          100.0%
 shouldIndex                    80.0%          100.0%
 http2/hpack package            89.2%           89.6%
 ```
+
+The `before` column is the `.14` TAG, checked out, not this tree with the new file moved aside; the
+command is written out because the two are not the same measurement and a bare percentage does not
+say which one it is. Re-run at `v0.6.9-sightglass.18`: `.14` gives `89.2%`, this tree gives `89.6%`
+on two consecutive runs.
 
 0.0% is the number that matters: a consumer's parity guard exercised the seam end to end, and the
 fork's own suite never touched it at all.
@@ -1449,8 +1476,11 @@ decoder:  tshark 4.4.8, decrypting with the browser's OWN SSLKEYLOGFILE
 check them.** The Chrome HTTP/2 figures are the two captures that carry HTTP/2 to real origins,
 `chrome-153.0.8010.37/smoke-20260915T174204Z` (19 request HEADERS blocks) and
 `chrome-153.0.8010.37/h3-depth-20260915T181108Z` (100); the HTTP/1.1 figures are
-`h1-cookies-20260915T215150Z` (722 requests over TLS with forced ALPN) plus one `h1-localhost-*`
-(22 to a flag-free `http://localhost` origin). Sightglass's own
+`h1-cookies-20260915T215150Z` (722 requests over TLS with forced ALPN) plus
+`h1-localhost-20260915T221335Z` (22 to a flag-free `http://localhost` origin). Naming that capture
+rather than "one `h1-localhost-*`" matters even though the answer is the same either way: of the
+three, `…221335Z` and `…221411Z` each carry 22 and `…221253Z` carries 0, so an unnamed scope was
+reproducible by luck and not by construction. Sightglass's own
 `go/tlsemu/testdata/PARITY_MATRIX.md` rows H1-4 and H2-15 quote the same scope, so the two documents
 now agree by construction rather than by coincidence. The `h1-depth-*` captures carry a little
 HTTP/2 as well, and counting them is a DIFFERENT census; it is the right-hand column below, so that
@@ -1503,31 +1533,37 @@ running total. The measurement for the tree as it stands is here, and it is the 
 command: GOTOOLCHAIN=auto go test ./... -count=1 -timeout 60m
          same machine, one run after the other, never concurrently
 before:  v0.6.9-sightglass.11 in a clean worktree of the published tag (895d5a8)
-after:   v0.6.9-sightglass.17, this tree
+after:   v0.6.9-sightglass.18, this tree
 
-before:  36 failing tests   root package 654.622s   (TestOmitHTTP2 FAILED, 601s of that 654s)
-after:   35 failing tests   root package  51.329s   (TestOmitHTTP2 PASSED)
+before:  36 failing tests   root package 655.265s   whole run 659.257s wall
+after:   36 failing tests   root package 659.742s   whole run 663.542s wall
 
-NEW failures: none. The `after` set is the `before` set MINUS TestOmitHTTP2; every other failure is
-              the same test on both sides, name for name, diffed with `comm` on the two sorted
-              `--- FAIL` lists rather than by comparing totals.
-FIXED by these tags: none. .12 through .17 change no product code — every change to a non-test .go
+NEW failures: NONE, and this pair says more than "no new ones". The two sorted `--- FAIL` lists are
+              IDENTICAL — 36 names on each side, `comm -13` and `comm -23` both empty — rather than
+              one being a subset of the other. Diffed as lists, never as totals.
+              Up to v0.6.9-sightglass.17 this block put a 35 against a 36 and called the difference
+              TestOmitHTTP2. That was true of THAT pair, but the two sides had been measured in
+              different load regimes and the block rendered the same `after` run three ways (below).
+              This pair was measured in one session, one run after the other, nothing else running,
+              and TestOmitHTTP2 fails on BOTH sides of it.
+FIXED by these tags: none. .12 through .18 change no product code — every change to a non-test .go
               file since .11 is a comment or a [SIGHTGLASS PATCH n] marker, which `git diff
-              v0.6.9-sightglass.11 HEAD -- '*.go'` shows directly. The two runs above were made on
-              the .15/.16 tree; .16 and .17 change only prose and comments, so the measurement
-              carries.
+              v0.6.9-sightglass.11 HEAD -- '*.go'` shows directly.
 
 Packages: fhttp, fhttp/http2 and fhttp/httputil FAIL on both sides; cgi, cookiejar, fcgi,
 http2/h2c, http2/hpack, httptest, httptrace, internal, internal/profile and pprof are ok on
-both. There is no [build failed] and no blanket skip anywhere in either run.
+both. Neither run contains one `--- SKIP` line or one [build failed]: `grep -c '^--- SKIP'` is 0
+and `grep -c 'build failed'` is 0 on both transcripts. A package whose tests are skipped wholesale
+is not a passing package, so that is checked rather than assumed.
 
-HOW THE `after` COUNT WAS TAKEN, because the guard above is part of the suite it measures. The
-tree was run TWICE. The first run was made with this block still holding .14's numbers, and reported
-36 — 35 plus exactly ONE extra failure, TestPatchesMDRegressionDiffIsForTHISTree, the guard
-immediately above refusing a diff that is not this tree's. The block was then filled with those
-numbers and the whole suite re-run: **35 failing, root package 51.329s, no doc test among them**.
-The numbers above are the SECOND run, so they describe the tree as it actually ships rather than a
-tree with one known-red guard in it.
+HOW THE `after` COUNT WAS TAKEN, because the guard above is part of the suite it measures. This
+tree was run ONCE, with this block still holding .17's numbers, and the doc guard did not object:
+TestPatchesMDRegressionDiffIsForTHISTree checks the TAGS, not the numbers, and the `after:` line
+already read v0.6.9-sightglass.18 — a tag that did not exist yet, which is the one state in which
+the file may name its own tag before it is cut. So the 36 above is the whole suite with no
+known-red guard in it, and filling in these numbers afterwards changes no test's outcome. (Up to
+.14 that was not true: the block claimed a tag check that did not exist and shipped numbers
+measured at .12 and .13.)
 
 RETRACTED, FALSE: "not a hang, and not a larger failure set. With 25m the package completes."
 Revisions of this file up to and including v0.6.9-sightglass.14 said that about the root package,
@@ -1543,10 +1579,22 @@ It IS a hang, it is NOT TestOmitHTTP2 (which never ran in that run at all), and 
 that revision published were partial totals truncated by that panic. What actually happens is
 LOAD-DEPENDENT and has three observed outcomes on this machine:
 
-  root package 654.6s, 36 failing  — TestOmitHTTP2 runs its subprocess suite into that
-                                     subprocess's own 10-minute timeout and FAILS. Observed at
-                                     .11 (before, above).
-  root package  55.0s, 35 failing  — TestOmitHTTP2 passes. Observed at .15 (after, above).
+  root package 655-660s, 36 failing — TestOmitHTTP2 runs its subprocess suite into that
+                                     subprocess's own 10-minute timeout and FAILS. Observed twice
+                                     in one session: 655.265s at .11 and 659.742s at .18. Those
+                                     are the two sides of the pair above, and they are what makes
+                                     that pair comparable.
+  root package ~51-55s, 35 failing — TestOmitHTTP2 PASSES and the package finishes in under a
+                                     minute. THE PUBLISHED NUMBER FOR THIS OUTCOME IS RETRACTED,
+                                     not the outcome: revisions .15 .. .17 rendered ONE run three
+                                     ways — "51.329s" on the `after:` line, "55.0s" ten lines
+                                     below it, "51.3 s" in PROGRAMME F67 — and attributed it to
+                                     three different tags (.15, .16, .16). One measurement cannot
+                                     have three values, so none of the three is quoted as a
+                                     measurement any more. That the outcome exists is not in
+                                     doubt and does not rest on that run: the root package run
+                                     ALONE passed TestOmitHTTP2 twice, at 50.7s and 60.8s, which
+                                     is what patch 4's entry cites.
   root package 1500.3s, PANIC      — TestCancelRequestWhenSharingConnection exhausts the ephemeral
                                      range, and TestMissingStatusNoPanic, which runs next, blocks
                                      24m8s in `<-done` while its own listener sits in Accept: the
@@ -1579,13 +1627,19 @@ is not:
       above and PASSED in the .15 one, on a tree whose product code is identical, which
       is what "load-dependent" means and why this file attributes it to nothing.
 
-  It is NOT our added tests. Skipping every test in the nine files this fork adds to
-      the root package leaves TestOmitHTTP2 at 601.55 s and still failing.
+  It is NOT our added tests. Skipping every test in the four files this fork adds to
+      the root package — header_http1omit_test.go, no_auto_headers_test.go,
+      patches_doc_test.go, transport_deflate_leak_test.go — leaves TestOmitHTTP2 at
+      601.55 s and still failing. (Revisions up to v0.6.9-sightglass.17 said "the nine
+      files": nine is every test file this fork adds, but five of them are in http2/ and
+      http2/hpack/ and cannot affect this package's run at all.)
 
 THE COUNT IS NOT STABLE ACROSS RUNS and this file does not claim it is. Observed on this line of
-history: 36, 36, 35, 35 — the 35s are the runs where TestOmitHTTP2 passed, and 34 with patch 4
-reverted. The invariant a regression diff needs does hold: no run of .12 .. .15 has produced a
-failure that .11 did not.
+history: 36, 36, 35, 35, 36 — the 35s are the runs where TestOmitHTTP2 passed, and 34 with patch 4
+reverted. The invariant a regression diff needs does hold, and at .18 it holds in its strongest
+form: no run of .12 .. .18 has produced a failure that .11 did not, and the .11/.18 pair above is
+identical failure for failure. (Revisions up to .17 wrote this sentence as ".12 .. .15" while the
+tree was at .17, so the span excluded the two most recent tags it was meant to cover.)
 
 Two upstream failures this fork FIXES, for the same reason the suite is kept:
 `TestCompressionDeflate` (patch 7 — upstream's own test for raw DEFLATE, which it fails) and
@@ -1601,7 +1655,9 @@ fails; ours is ok).
 **RETRACTED, HARMFUL: the instruction that used to sit here.** Up to and including
 `v0.6.9-sightglass.11` this section read "re-copy upstream, strip tests, re-apply the hunks above
 (four for patch 1, one for patch 2, three for patch 3, three for patch 4, two for patch 5)". Three
-separate things about it were FALSE or HARMFUL, and each is RETRACTED here:
+separate things about it were FALSE or HARMFUL: a re-copy reverts the rewritten module path,
+Upstream's 73 test files are KEPT, and the section sat in the MIDDLE of the file so "above" excluded
+six of the fourteen entries. Each is RETRACTED in full here:
 
 * RETRACTED, HARMFUL — "strip tests". Upstream's 73 test files are KEPT and are the reason patch 4b
   exists. Stripping them is how the CONNECT leak survived patch 4 in the first place.
@@ -1623,9 +1679,13 @@ separate things about it were FALSE or HARMFUL, and each is RETRACTED here:
 3. **Keep every `*_test.go`, `export_test.go` and `testdata/`.** If a merge conflict tempts you to
    drop one, resolve it instead.
 4. Resolve conflicts against the markers, not against this file's prose. Every site of every patch
-   carries a `[SIGHTGLASS PATCH n]` comment — all 24 marked files, including the five upstream files
-   patch 4b edits and the nine guards this fork adds — so
-   `grep -rn 'SIGHTGLASS PATCH' --include='*.go' .` lists them all.
+   carries a numbered `[SIGHTGLASS PATCH n]` comment — all 24 files that carry a numbered marker,
+   including the six upstream files patch 4b edits and eight of the nine guards this fork adds
+   (`patches_doc_test.go` guards this document rather than a numbered patch, so its marker carries no
+   number) — so `grep -rln 'SIGHTGLASS PATCH' --include='*.go' .` lists all 25 marked files: those 24
+   plus `patches_doc_test.go`. `patches_doc_test.go` derives both counts from the tree, so neither
+   can drift; up to `v0.6.9-sightglass.17` this step said "all 24 marked files … and the nine guards"
+   and sent the maintainer to a grep that returns 25.
    `patches_doc_test.go` fails if a patch documented here has no marker in the tree, if a marker in
    the tree has no entry here, **or if a marker names a patch the "Files touched" manifest does not
    list beside that same file**. That last one is new in `v0.6.9-sightglass.15` and it is the check

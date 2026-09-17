@@ -1,6 +1,6 @@
 // PATCHES.md is this fork's provenance record, and it has been WRONG in published tags: it named
 // the wrong upstream base (v0.6.8 for a tree based on v0.6.9), described a `replace` directive and a
-// third_party/ tree that never existed here, claimed "0 test files" for a tree carrying 80, printed
+// third_party/ tree that never existed here, claimed "0 test files" for a tree carrying 82, printed
 // line-number citations that had drifted by up to 120 lines, gave two different sections the number
 // 8 while leaving 6 unused, labelled the patch-5 comment in http2/client_conn_pool.go "PATCH 3",
 // pointed at a file called FHTTP_LAYER_PATCH.md that has never existed, and asserted that the
@@ -494,6 +494,259 @@ func TestPatchesMDTestFileCountIsTrue(t *testing.T) {
 			"Which upstream tests this fork touched is the difference between \"we kept upstream's suite\" "+
 			"and \"we kept the parts of it that still pass\".", edited, editedTests)
 	}
+
+	// EVERY occurrence, not only the sentence above. This check used to parse the front-matter
+	// sentence and nothing else, and while it was green the RETRACTED CLAIMS section 18 lines below
+	// corrected a false count ("0 test files") with another false count ("the tree carries 81"), and
+	// the string "FALSE. The tree carries 81" was additionally hard-coded in THIS FILE as the `why`
+	// of that retraction. A guard that pins one occurrence of a number pins the number nowhere.
+	checked := 0
+	checked += checkCounts(t, patchesFile, doc, totalTestFilesRE, real,
+		"the number of *_test.go files this tree carries",
+		"Upstream's suite is kept on purpose — it is what found patch 4b — so every statement of this "+
+			"count is load-bearing, including the ones inside the RETRACTED CLAIMS section.")
+	checked += checkCounts(t, patchesFile, doc, treeCarriesRE, real,
+		"the number of *_test.go files this tree carries",
+		"A retraction section that corrects a false count with a false count is the same defect one "+
+			"layer up.")
+	checked += checkCounts(t, patchesFile, doc, upstreamTestFilesRE, upstream,
+		"the number of test files kept from upstream v0.6.9",
+		"This is the count the retracted \"strip tests\" instruction would have destroyed.")
+	checked += checkCounts(t, patchesFile, doc, fromUpstreamRE, upstream,
+		"the number of test files kept from upstream v0.6.9",
+		"This is the count the retracted \"strip tests\" instruction would have destroyed.")
+	// The sweep also has to read THIS FILE's own prose. The `why` text of the "0 test files"
+	// retraction hard-coded the string "FALSE. The tree carries 81, and the retained upstream suite
+	// is what found patch 4b." — the guard that PATCHES.md credits with pinning the count was
+	// itself publishing the wrong count, and printing it in its own failure messages.
+	for _, r := range retracted {
+		checked += checkCounts(t, "patches_doc_test.go `why`", r.why, treeCarriesRE, real,
+			"the number of *_test.go files this tree carries, in the `why` of retracted claim "+
+				strconv.Quote(r.claim),
+			"This text is what the guard prints when it fails, so a wrong count here is a wrong count "+
+				"handed to the next reader at the exact moment they are trusting the guard.")
+		checked += checkCounts(t, "patches_doc_test.go `why`", r.why, upstreamTestFilesRE, upstream,
+			"the number of test files kept from upstream, in the `why` of retracted claim "+
+				strconv.Quote(r.claim),
+			"Same reason: the correction text is published by the guard itself.")
+	}
+
+	if checked < 4 {
+		t.Errorf("the test-file-count sweep matched only %d count claims in PATCHES.md. It is supposed to "+
+			"read the front-matter sentence, the retraction of \"0 test files\", and the Maintenance "+
+			"section's \"Upstream's N test files are KEPT\" — if the prose has been reshaped, reshape the "+
+			"sweep with it rather than letting it pass on nothing.", checked)
+	}
+}
+
+// numberWords is here because every count an adversarial reader found wrong in
+// v0.6.9-sightglass.17 was spelled out rather than written in digits — "ten guards", "Seven are
+// new", "the nine guards this fork adds", "the nine files this fork adds to the root package" —
+// and every check in this file only ever looked at digits. A count that no guard can read is a
+// count nobody checks, and four of them were wrong at once.
+var numberWords = map[string]int{
+	"zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
+	"eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14,
+	"fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19, "twenty": 20,
+	"twenty-four": 24, "twenty-five": 25, "twenty-six": 26,
+}
+
+// countIn reads a count written as digits or as an English word. ok is false when the token is not
+// a count at all, which is how the sweeps below tolerate a regex that also matches ordinary prose.
+func countIn(s string) (int, bool) {
+	if n, err := strconv.Atoi(s); err == nil {
+		return n, true
+	}
+	n, ok := numberWords[strings.ToLower(s)]
+	return n, ok
+}
+
+// countTok matches a count written either way. The `-` alternative is for "twenty-four".
+const countTok = `(\d+|[A-Za-z]+(?:-[A-Za-z]+)?)`
+
+var (
+	totalTestFilesRE    = regexp.MustCompile(countTok + " `\\*_test\\.go` files")
+	treeCarriesRE       = regexp.MustCompile(`[Tt]he tree carries \*{0,2}` + countTok)
+	upstreamTestFilesRE = regexp.MustCompile(`[Uu]pstream'?s ` + countTok + ` test files`)
+	fromUpstreamRE      = regexp.MustCompile(countTok + ` from upstream v`)
+	addedToRootPkgRE    = regexp.MustCompile(countTok + ` files this fork adds to\s+the root package`)
+
+	productAndGuardsRE = regexp.MustCompile(countTok + ` product files and ` + countTok + ` guards`)
+	newWithPatchRE     = regexp.MustCompile(countTok + ` are new with the patch they guard`)
+	numberedMarkersRE  = regexp.MustCompile(`all ` + countTok + ` files that carry a numbered`)
+	allMarkersRE       = regexp.MustCompile(`lists all ` + countTok + ` marked files`)
+	guardsOfGuardsRE   = regexp.MustCompile(countTok + ` of the ` + countTok + ` guards this fork adds`)
+	patch4bFilesRE     = regexp.MustCompile(`the ` + countTok + ` upstream files patch 4b edits`)
+)
+
+// lineAndSnippet locates a byte offset in some text for a failure message. Line numbers are banned
+// in PATCHES.md's own prose (TestPatchesMDCitesNoLineNumbersIntoThisTree) because they drift; in a
+// failure message they are computed at the moment of failure and are the fastest way to the sentence.
+func lineAndSnippet(where, doc string, off int) string {
+	line := strings.Count(doc[:off], "\n") + 1
+	lo := strings.LastIndexByte(doc[:off], '\n') + 1
+	hi := off
+	for n := 0; n < 2 && hi < len(doc); n++ {
+		j := strings.IndexByte(doc[hi+1:], '\n')
+		if j < 0 {
+			hi = len(doc)
+			break
+		}
+		hi += j + 1
+	}
+	return where + ":" + strconv.Itoa(line) + ": " + squash(doc[lo:hi])
+}
+
+// checkCounts requires capture group 1 of every match of re to equal want, and returns how many
+// count claims it actually read so the caller can refuse to pass on zero. `where` names the text
+// being swept, because this sweep reads THIS FILE's own prose as well as PATCHES.md and a failure
+// message that says the wrong one sends the reader to the wrong place.
+func checkCounts(t *testing.T, where, doc string, re *regexp.Regexp, want int, what, why string) int {
+	t.Helper()
+	n := 0
+	for _, loc := range re.FindAllStringSubmatchIndex(doc, -1) {
+		tok := doc[loc[2]:loc[3]]
+		got, ok := countIn(tok)
+		if !ok {
+			continue // the regex also matches ordinary prose; that is not a count claim
+		}
+		n++
+		if got != want {
+			t.Errorf("%s states %s as %q; it is %d.\n  %s\n%s",
+				where, what, tok, want, lineAndSnippet(where, doc, loc[0]), why)
+		}
+	}
+	return n
+}
+
+// TestPatchesMDGuardAndMarkerCountsAreTrue pins the counts that describe THIS FORK'S OWN additions:
+// how many guards it adds, how many of them are new with the patch they guard, how many files carry
+// a numbered marker, and how many the Maintenance grep returns. All four were wrong at
+// v0.6.9-sightglass.17 and all four were spelled in words, which is why nothing caught them.
+func TestPatchesMDGuardAndMarkerCountsAreTrue(t *testing.T) {
+	doc := patchesDoc(t)
+	docAdded, docModified, _ := docManifest(t, doc)
+
+	addedGuards, addedProduct, addedRootPkgTests := 0, 0, 0
+	for p := range docAdded {
+		switch {
+		case strings.HasSuffix(p, "_test.go"):
+			addedGuards++
+			if !strings.Contains(p, "/") {
+				addedRootPkgTests++
+			}
+		case strings.HasSuffix(p, ".go"):
+			addedProduct++
+		}
+	}
+
+	markers := markerNumbersByFile(t)
+	guardsWithAPatchNumber := 0
+	for p := range docAdded {
+		if strings.HasSuffix(p, "_test.go") && len(markers[p]) > 0 {
+			guardsWithAPatchNumber++
+		}
+	}
+
+	numbered := len(markers)
+	allMarked := filesCarryingAnyMarker(t)
+
+	patch4bUpstream := 0
+	for p, ps := range docFilePatches(t, doc) {
+		if ps["4b"] && docModified[p] {
+			patch4bUpstream++
+		}
+	}
+
+	checked := 0
+	checked += checkCounts(t, patchesFile, doc, addedToRootPkgRE, addedRootPkgTests,
+		"the number of test files this fork adds to the ROOT package",
+		"The other added guards live in http2/ and http2/hpack/ and cannot affect TestOmitHTTP2's "+
+			"package at all, so quoting the whole added set here makes the regression diff say something "+
+			"it did not measure.")
+	checked += checkCounts(t, patchesFile, doc, newWithPatchRE, guardsWithAPatchNumber,
+		"the number of added guards that are new WITH the patch they guard",
+		"patches_doc_test.go guards this document rather than a numbered patch, so it is not one of "+
+			"them; markerNumbersByFile is what decides.")
+	checked += checkCounts(t, patchesFile, doc, numberedMarkersRE, numbered,
+		"the number of files carrying a NUMBERED [SIGHTGLASS PATCH n] comment",
+		"Maintenance step 4 sends the next maintainer to this number; if it is wrong they stop looking "+
+			"before they have seen every patch site.")
+	checked += checkCounts(t, patchesFile, doc, allMarkersRE, allMarked,
+		"the number of files the Maintenance grep for SIGHTGLASS PATCH actually returns",
+		"patches_doc_test.go carries an UNnumbered marker, so the grep returns one more file than the "+
+			"numbered count. A maintainer who diffs the two and finds a discrepancy stops trusting both.")
+	checked += checkCounts(t, patchesFile, doc, patch4bFilesRE, patch4bUpstream,
+		"the number of upstream files patch 4b edits",
+		"Derived from the manifest's own patch attribution crossed with git's M status.")
+
+	for _, loc := range productAndGuardsRE.FindAllStringSubmatchIndex(doc, -1) {
+		prod, okP := countIn(doc[loc[2]:loc[3]])
+		guards, okG := countIn(doc[loc[4]:loc[5]])
+		if !okP || !okG {
+			continue
+		}
+		checked += 2
+		if prod != addedProduct || guards != addedGuards {
+			t.Errorf("PATCHES.md's ADDED manifest summary says %d product file(s) and %d guard(s); the "+
+				"manifest it summarises lists %d product file(s) and %d guard(s).\n  %s\n"+
+				"The summary and the list it sits under must agree, or one of them is decoration.",
+				prod, guards, addedProduct, addedGuards, lineAndSnippet(patchesFile, doc, loc[0]))
+		}
+	}
+	for _, loc := range guardsOfGuardsRE.FindAllStringSubmatchIndex(doc, -1) {
+		some, okS := countIn(doc[loc[2]:loc[3]])
+		all, okA := countIn(doc[loc[4]:loc[5]])
+		if !okS || !okA {
+			continue
+		}
+		checked += 2
+		if some != guardsWithAPatchNumber || all != addedGuards {
+			t.Errorf("PATCHES.md says %d of the %d guards this fork adds carry a numbered marker; it is "+
+				"%d of %d.\n  %s", some, all, guardsWithAPatchNumber, addedGuards, lineAndSnippet(patchesFile, doc, loc[0]))
+		}
+	}
+
+	if checked < 7 {
+		t.Errorf("the guard/marker count sweep read only %d count claims. It is supposed to read the "+
+			"ADDED manifest summary, the root-package sentence in the regression diff, and Maintenance "+
+			"step 4's two marker counts; if the prose has been reshaped, reshape the sweep with it.", checked)
+	}
+}
+
+// filesCarryingAnyMarker counts what `grep -rln 'SIGHTGLASS PATCH' --include='*.go' .` returns —
+// numbered markers plus the unnumbered one in patches_doc_test.go, which markerNumbersByFile
+// deliberately skips. The two numbers differ by exactly that file, and Maintenance step 4 cites
+// both, so both are derived here rather than typed.
+func filesCarryingAnyMarker(t *testing.T) int {
+	t.Helper()
+	n := 0
+	err := filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			if info.Name() == ".git" || info.Name() == "testdata" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if strings.Contains(string(b), "SIGHTGLASS PATCH") {
+			n++
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking the tree for markers: %v", err)
+	}
+	return n
 }
 
 // retracted are claims and instructions this file published in tags that are now known to be false
@@ -501,33 +754,59 @@ func TestPatchesMDTestFileCountIsTrue(t *testing.T) {
 // edited, so the correction has to stay visible in the tree that supersedes them — but only inside a
 // paragraph that retracts them. Reintroducing one as an assertion, in a paragraph that does not say
 // it is wrong, is the failure this pins.
+// discriminators is what BINDS a marker to the claim it retracts, and it is the third thing this
+// guard needed. Markers alone were not enough: FALSE, HARMFUL, RETRACTED and RETRACTION occur 30-odd
+// times in PATCHES.md, so "a marker within 400 bytes" was satisfied by a marker that retracts
+// something else. An adversarial reader defeated the guard with exactly that, inserting
+//
+//	Note for the reader: no stream-map leak resulted from the old code, because `Close()` calls
+//	`forgetStreamID` unconditionally. (Separately, the old claim that the base is v0.6.8 is FALSE;
+//	it is v0.6.9.)
+//
+// after "## Maintenance" and watching all fourteen doc guards stay green. The re-asserted sentence
+// is the one this fork exists to retract; the nearby ALL-CAPS FALSE retracts the BASE VERSION.
+// Proximity is not association.
+//
+// So a window now has to carry a marker AND a phrase that could only have been written while
+// correcting THIS claim. The phrases are drawn from the claim's own `why` text, and
+// TestRetractionDiscriminatorsComeFromTheWhy enforces that they are, so the list cannot quietly
+// loosen into generic prose the way retractionMarkers did.
 var retracted = []struct {
-	claim string
-	why   string
+	claim          string
+	why            string
+	discriminators []string
 }{
 	{"stream-map leak",
 		"FALSE. It is true only of transportResponseBody.Close(). On the context-cancel path " +
 			"(awaitRequestCancel -> cancelStream) the inverted condition sent no RST_STREAM AND called no " +
 			"cc.forgetStreamID, so the clientStream stayed in cc.streams for the life of the connection. " +
 			"Measured on the shipped path by parity.TestParityHTTP2CancelledStreamsDoNotConsumeSlots: 100 " +
-			"context-cancelled requests fill ChromeInitialMaxConcurrentStreams and the 101st never goes out."},
+			"context-cancelled requests fill ChromeInitialMaxConcurrentStreams and the 101st never goes out.",
+		[]string{"cc.forgetStreamID", "transportResponseBody.Close()"}},
 	{"v0.6.8",
-		"FALSE twice over: the base is v0.6.9, and this is a fork with a rewritten module path, not a " +
-			"vendored tree."},
+		"FALSE twice over: the base is v0.6.9, commit a8b1417 — v0.6.8 is ecfe905, one release earlier " +
+			"— and this is a fork with a rewritten module path, not a vendored tree.",
+		[]string{"a8b1417", "ecfe905"}},
 	{"replace github.com/bogdanfinn/fhttp",
 		"FALSE. go/go.mod has zero replace directives and go/AGENTS.md forbids them, because a directory " +
-			"replace does not propagate to dependents."},
+			"replace does not propagate to dependents. There is no such directive and no third_party/fhttp " +
+			"directory, here or in Sightglass.",
+		[]string{"no such directive", "third_party"}},
 	{"0 test files",
-		"FALSE. The tree carries 81, and the retained upstream suite is what found patch 4b."},
+		"FALSE. The tree carries 82, and the retained upstream suite is what found patch 4b.",
+		[]string{"retained upstream suite", "found patch 4b"}},
 	{"strip tests",
 		"HARMFUL. It was an instruction in the Maintenance section; following it deletes the suite that " +
-			"catches the defects."},
+			"catches the defects. Upstream's 73 test files are KEPT, and they are the reason patch 4b exists.",
+		[]string{"the suite that catches the defects", "Upstream's 73 test files are KEPT"}},
 	{"re-copy upstream",
 		"HARMFUL. This is a fork with a rewritten module path across 86 files; a re-copy reverts the " +
-			"rewrite and the tree stops compiling against go/go.mod. Merge the upstream tag instead."},
+			"rewrite and the tree stops compiling against go/go.mod. Merge the upstream tag instead.",
+		[]string{"rewritten module path"}},
 	{"re-apply the hunks above",
 		"HARMFUL. The Maintenance section that said it sat in the MIDDLE of the file, so \"above\" " +
-			"excluded patches 4b, 6, 7, 8, 8b and 10 — six of the fourteen entries."},
+			"excluded patches 4b, 6, 7, 8, 8b and 10 — six of the fourteen entries.",
+		[]string{"MIDDLE of the file", "six of the fourteen"}},
 }
 
 // retractionMarkers are what a paragraph must say for it to count as RETRACTING, rather than
@@ -546,10 +825,20 @@ var retracted = []struct {
 // cannot quietly loosen again.
 var retractionMarkers = []string{"FALSE", "HARMFUL", "RETRACTED", "RETRACTION"}
 
-// retractionWindow is how close a marker has to be to the claim it retracts. Presence anywhere in
-// the paragraph was the second half of the hole: a long paragraph can retract one thing and assert
+// retractionWindow is how close a discriminating phrase has to be to the claim it corrects, and
+// retractionMarkerWindow is how close the ALL-CAPS marker has to be. Presence anywhere in the
+// paragraph was the second half of the hole: a long paragraph can retract one thing and assert
 // another, and the guard could not tell which sentence the marker belonged to.
-const retractionWindow = 400
+//
+// 150 is derived from the document rather than chosen: the largest marker-to-claim distance in
+// PATCHES.md is 123 bytes, at the Maintenance section's quotation of all three retracted
+// instructions at once. It is deliberately tight. A marker two paragraphs away from the claim it is
+// supposed to retract is the failure this pins, so leaving room for one is the wrong instinct — if
+// a future edit pushes a marker past it, move the marker, not the constant.
+const (
+	retractionWindow       = 400
+	retractionMarkerWindow = 150
+)
 
 // TestRetractionMarkersCannotBeOrdinaryProse is the guard ON the guard below. Without it,
 // TestPatchesMDDoesNotRepeatItsRetractedClaims can be defeated by widening its own word list, which
@@ -568,23 +857,88 @@ func TestRetractionMarkersCannotBeOrdinaryProse(t *testing.T) {
 	}
 }
 
-// markerNear reports whether one of the retraction markers sits within retractionWindow bytes of the
-// claim occurrence at `at`.
-func markerNear(para string, at, n int) bool {
-	lo, hi := at-retractionWindow, at+n+retractionWindow
-	if lo < 0 {
-		lo = 0
-	}
-	if hi > len(para) {
-		hi = len(para)
-	}
-	win := para[lo:hi]
-	for _, w := range retractionMarkers {
-		if strings.Contains(win, w) {
-			return true
+// TestRetractionDiscriminatorsComeFromTheWhy is the second guard ON the guard below, and it is what
+// keeps `discriminators` from decaying into "any word that happens to be nearby" — which is how
+// retractionMarkers decayed the first time. A discriminator must be a phrase out of the correction
+// itself, so writing one costs you the correction.
+func TestRetractionDiscriminatorsComeFromTheWhy(t *testing.T) {
+	for _, r := range retracted {
+		if len(r.discriminators) == 0 {
+			t.Errorf("retracted claim %q has no discriminating phrase, so any paragraph carrying any "+
+				"ALL-CAPS marker would count as retracting it — which is exactly the hole an adversarial "+
+				"reader walked through with %q", r.claim, "no stream-map leak resulted from the old code")
+			continue
+		}
+		for _, d := range r.discriminators {
+			if len(d) < 7 {
+				t.Errorf("discriminator %q for claim %q is %d bytes: too short to be specific to one "+
+					"correction", d, r.claim, len(d))
+			}
+			if !strings.Contains(r.why, d) {
+				t.Errorf("discriminator %q is not a phrase from the `why` of claim %q:\n  why: %s\n"+
+					"A discriminator that is not part of the correction does not bind the marker to the "+
+					"claim; it is just another word that can appear by accident.", d, r.claim, r.why)
+			}
 		}
 	}
-	return false
+}
+
+// retractionNear reports whether the claim occurrence at `at` is RETRACTED rather than merely
+// mentioned near something strong-sounding: within retractionWindow bytes there must be both
+//
+//	(a) an ALL-CAPS retraction marker, and
+//	(b) a phrase from THIS claim's own correction.
+//
+// (b) is the half that was missing. With (a) alone the guard could be satisfied by a marker that
+// retracts a different claim, and it was: see the comment on `discriminators`.
+//
+// It returns the two answers separately so the failure message can say WHICH half is missing — a
+// guard that says only "this failed" sends the next reader to read the whole paragraph.
+func retractionNear(para string, at, n int, discriminators []string) (marker, discriminator bool) {
+	window := func(w int) string {
+		lo, hi := at-w, at+n+w
+		if lo < 0 {
+			lo = 0
+		}
+		if hi > len(para) {
+			hi = len(para)
+		}
+		return para[lo:hi]
+	}
+	near := window(retractionMarkerWindow)
+	for _, w := range retractionMarkers {
+		if strings.Contains(near, w) {
+			marker = true
+			break
+		}
+	}
+	wide := window(retractionWindow)
+	for _, d := range discriminators {
+		if strings.Contains(wide, d) {
+			discriminator = true
+			break
+		}
+	}
+	return marker, discriminator
+}
+
+// quotedAt reports whether the claim occurrence at [at, at+n) sits inside a double-quoted span.
+//
+// This is the third condition, and it is the one that closes the attack the other two do not. A
+// marker plus a discriminating phrase can both be COPIED into a sentence that asserts the claim
+// anyway — "no stream-map leak resulted from the old code, because transportResponseBody.Close()
+// calls cc.forgetStreamID unconditionally, so nothing was RETRACTED here after all" satisfies both
+// and is a re-assertion. What a retraction never does is STATE the claim: it QUOTES it and then
+// corrects it. So every occurrence of a retracted claim in this file has to be inside quotes.
+//
+// What this still cannot prove: that the prose around the quotation means what it says. A writer
+// determined to mislead can quote the claim, put FALSE beside it and then agree with it. Three
+// lexical conditions make that require deliberate work rather than carelessness, which is the bar a
+// document guard can actually reach; the claim's TRUTH is pinned in code by
+// TestCancelStreamForgetsTheStream and on the shipped path by
+// parity.TestParityHTTP2CancelledStreamsDoNotConsumeSlots, and that is where it belongs.
+func quotedAt(para string, at, n int) bool {
+	return strings.Count(para[:at], `"`)%2 == 1 && strings.Contains(para[at+n:], `"`)
 }
 
 // TestPatchesMDDoesNotRepeatItsRetractedClaims fails if any retracted claim appears anywhere that
@@ -592,8 +946,9 @@ func markerNear(para string, at, n int) bool {
 //
 //	(1) the claim must still appear at all — the published tags carrying it cannot be edited, so the
 //	    correction has to live in the tree that supersedes them;
-//	(2) EVERY occurrence must have a retraction marker within retractionWindow bytes of it, in the
-//	    same paragraph;
+//	(2) EVERY occurrence must have, within retractionWindow bytes of it and in the same paragraph,
+//	    BOTH a retraction marker AND a phrase from that claim's own correction — a marker alone
+//	    proves only that some retraction is nearby, not that THIS claim is the one being retracted;
 //	(3) at least one occurrence must sit beside the literal "RETRACTED", so that there is one place a
 //	    reader can find the correction rather than only places that are not the assertion.
 func TestPatchesMDDoesNotRepeatItsRetractedClaims(t *testing.T) {
@@ -615,10 +970,26 @@ func TestPatchesMDDoesNotRepeatItsRetractedClaims(t *testing.T) {
 				}
 				at := off + i
 				found++
-				if !markerNear(para, at, len(r.claim)) {
+				marker, disc := retractionNear(para, at, len(r.claim), r.discriminators)
+				switch {
+				case !quotedAt(para, at, len(r.claim)):
+					t.Errorf("PATCHES.md STATES the retracted claim %q rather than quoting it:\n  ...%s...\n"+
+						"Why it is retracted: %s\n"+
+						"A retraction never asserts the claim; it quotes the sentence that was published and "+
+						"then corrects it. Put the claim in double quotes, or do not write it.",
+						r.claim, squash(para), r.why)
+				case !marker:
 					t.Errorf("PATCHES.md states the retracted claim %q with no retraction marker %v within "+
 						"%d bytes of it:\n  ...%s...\nWhy it is retracted: %s",
-						r.claim, retractionMarkers, retractionWindow, squash(para), r.why)
+						r.claim, retractionMarkers, retractionMarkerWindow, squash(para), r.why)
+				case !disc:
+					t.Errorf("PATCHES.md states the retracted claim %q beside a retraction marker that "+
+						"retracts something else. Within %d bytes there is no phrase from THIS claim's "+
+						"correction (%v), so the paragraph re-asserts the claim and retracts a different "+
+						"one:\n  ...%s...\nWhy %q is retracted: %s\n"+
+						"Proximity is not association: a reader who greps for this claim has to land on ITS "+
+						"correction, not on a paragraph that happens to say FALSE about the base version.",
+						r.claim, retractionWindow, r.discriminators, squash(para), r.claim, r.why)
 				}
 				off = at + len(r.claim)
 			}
@@ -1020,6 +1391,14 @@ func TestPatchesMDAttributesEveryMarkerToTheRightFile(t *testing.T) {
 	}
 }
 
+// guardRowRE matches a row of the per-patch guard table whose first cell is a patch id: `| 11 | ...`
+// or `| 4b | ...`. Rows keyed by something else ("this file", "sibling pins") are not patch rows and
+// carry no marker obligation. The prose above the table quotes an invented row inside backticks; it
+// does not begin a line with `|`, so it is not matched here.
+var guardRowRE = regexp.MustCompile(`(?m)^\|\s*(\d+[a-z]?)\s*\|([^|]*)\|`)
+
+var goPathRE = regexp.MustCompile("`([A-Za-z0-9_./-]+\\.go)`")
+
 // TestPatchesMDGuardTableNamesFilesThatExist pins the other half of "a guard cannot be cited into
 // existence". TestPatchesMDNamesGuardsThatExist checks TEST NAMES and exempts anything spelled
 // `parity.X`; it never checked the fork-side FILE names in the same table. An adversarial reader
@@ -1027,13 +1406,21 @@ func TestPatchesMDAttributesEveryMarkerToTheRightFile(t *testing.T) {
 // stayed green. This check covers the file half; the Sightglass half — that every `parity.Test*`
 // this file names resolves to a real test in go/ — is checked there, by
 // parity.TestForkPATCHESNamesSightglassGuardsThatExist, because the fork has no view of Sightglass.
+//
+// os.Stat alone was not enough either, and an adversarial reader proved that too: patch 7's row was
+// changed from `transport_deflate_leak_test.go` to `http2/goaway_flush_test.go` — a real file, the
+// wrong patch — and all fourteen guards stayed green. The table's stated job is "which half is
+// checked by which test", so a row that names a real file guarding a DIFFERENT patch fails the job
+// while passing the check. The fix is to cross the row against the markers: the file a patch row
+// names must itself carry [SIGHTGLASS PATCH n] for that same n.
 func TestPatchesMDGuardTableNamesFilesThatExist(t *testing.T) {
 	doc := patchesDoc(t)
 	sec := section(t, doc, "## Where each patch is guarded")
-	re := regexp.MustCompile("`([A-Za-z0-9_./-]+\\.go)`")
+	markers := markerNumbersByFile(t)
+
 	seen := map[string]bool{}
 	checked := 0
-	for _, m := range re.FindAllStringSubmatch(sec, -1) {
+	for _, m := range goPathRE.FindAllStringSubmatch(sec, -1) {
 		if seen[m[1]] {
 			continue
 		}
@@ -1048,6 +1435,30 @@ func TestPatchesMDGuardTableNamesFilesThatExist(t *testing.T) {
 	if checked == 0 {
 		t.Error("the guard table in PATCHES.md names no fork-local guard FILE at all, so this check read " +
 			"nothing and would pass on a table full of invented ones")
+	}
+
+	rows := 0
+	for _, row := range guardRowRE.FindAllStringSubmatch(sec, -1) {
+		patch, forkCell := row[1], row[2]
+		for _, f := range goPathRE.FindAllStringSubmatch(forkCell, -1) {
+			path := f[1]
+			if _, err := os.Stat(path); err != nil {
+				continue // the existence check above owns "this path is not in the tree"
+			}
+			rows++
+			if !markers[path][patch] {
+				t.Errorf("PATCHES.md's guard table gives patch %s the fork-local guard %q, but that file "+
+					"carries [SIGHTGLASS PATCH %v], not %s. The table's job is which half of a patch is "+
+					"checked by which test; a row that names a REAL file guarding a DIFFERENT patch passes "+
+					"os.Stat and still sends the next maintainer to the wrong test. Markers are the tie.",
+					patch, path, sortedKeys(markers[path]), patch)
+			}
+		}
+	}
+	if rows == 0 {
+		t.Error("no row of the per-patch guard table names a fork-local guard FILE, so the marker " +
+			"cross-check read nothing. patch 7, 8, 8b, 9, 10 and 11 each have one; if the table has been " +
+			"reshaped, reshape this check with it rather than letting it pass on nothing.")
 	}
 }
 

@@ -24,14 +24,29 @@ import (
 	"time"
 )
 
-// countResetsAfterCancel sets cs.didReset to the given value, calls cancelStream(), and reports how
-// many RST_STREAM frames the peer actually received and whether the clientStream was still in
-// cc.streams when cancelStream() returned.
+// cancelOutcome is everything cancelStream() owes the connection, observed after it returns.
 //
-// The second return value is not decoration. cc.forgetStreamID sits INSIDE the same `if` as the
-// reset, so the inverted condition dropped the bookkeeping along with the frame — see
+// `stillInMap` and `doneClosed` are BOTH needed, and an adversarial reader proved it: replacing
+// `cc.forgetStreamID(cs.ID)` with a bare `cc.mu.Lock(); delete(cc.streams, cs.ID); cc.mu.Unlock()`
+// takes the stream out of the map — so a map-only guard passes, and so does the Sightglass parity
+// guard that counts free concurrency slots — while silently dropping the rest of what
+// forgetStreamID does: `close(cs.done)`, `cc.cond.Broadcast()` and the idle-timer reset. That is a
+// wake-up leak of exactly the class patch 11 exists to close: `checkResetOrDone` and
+// `awaitFlowControl` wait on `cs.done` and `cc.cond`, and a stream that is gone from the map but
+// never signalled parks them forever.
+type cancelOutcome struct {
+	resets     int  // RST_STREAM frames the peer actually received
+	stillInMap bool // was the clientStream still in cc.streams when cancelStream() returned
+	doneClosed bool // was cs.done closed by then
+}
+
+// countResetsAfterCancel sets cs.didReset to the given value, calls cancelStream(), and reports what
+// the connection looked like afterwards.
+//
+// The bookkeeping half is not decoration. cc.forgetStreamID sits INSIDE the same `if` as the reset,
+// so the inverted condition dropped all of it along with the frame — see
 // TestCancelStreamForgetsTheStream.
-func countResetsAfterCancel(t *testing.T, didReset bool) (int, bool) {
+func countResetsAfterCancel(t *testing.T, didReset bool) cancelOutcome {
 	t.Helper()
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -94,11 +109,18 @@ func countResetsAfterCancel(t *testing.T, didReset bool) (int, bool) {
 
 	cs.cancelStream()
 
-	// Read the map BEFORE Close(), which tears down every stream on the connection and would erase
-	// the difference this is measuring.
+	// Read the map and cs.done BEFORE Close(), which tears down every stream on the connection —
+	// closing cs.done itself — and would erase the difference this is measuring.
 	cc.mu.Lock()
 	_, stillInMap := cc.streams[cs.ID]
 	cc.mu.Unlock()
+	doneClosed := false
+	select {
+	case <-cs.done:
+		doneClosed = true
+	default:
+	}
+	out := cancelOutcome{stillInMap: stillInMap, doneClosed: doneClosed}
 
 	// Close the connection so the server's ReadFrame loop ends and reports what it saw.
 	_ = cc.Close()
@@ -107,11 +129,12 @@ func countResetsAfterCancel(t *testing.T, didReset bool) (int, bool) {
 		if n < 0 {
 			t.Fatal("server side failed")
 		}
-		return n, stillInMap
+		out.resets = n
+		return out
 	case <-time.After(10 * time.Second):
 		t.Fatal("server never reported")
 	}
-	return 0, stillInMap
+	return out
 }
 
 func readFull(c net.Conn, b []byte) (int, error) {
@@ -128,14 +151,14 @@ func readFull(c net.Conn, b []byte) (int, error) {
 
 func TestCancelStreamResetsOnlyWhenNotAlreadyReset(t *testing.T) {
 	// Not yet reset: cancelStream owes the peer exactly one RST_STREAM.
-	if n, _ := countResetsAfterCancel(t, false); n != 1 {
+	if got := countResetsAfterCancel(t, false); got.resets != 1 {
 		t.Errorf("didReset=false: peer received %d RST_STREAM, want 1 — a cancelled stream that has "+
-			"not been reset must be reset once", n)
+			"not been reset must be reset once", got.resets)
 	}
 	// Already reset: cancelStream must send NOTHING. Chrome never sends two resets on one stream.
-	if n, _ := countResetsAfterCancel(t, true); n != 0 {
+	if got := countResetsAfterCancel(t, true); got.resets != 0 {
 		t.Errorf("didReset=true: peer received %d RST_STREAM, want 0 — the stream was already reset, "+
-			"so this is the duplicate Chrome never sends (measured 6/6 streams, one reset each)", n)
+			"so this is the duplicate Chrome never sends (measured 6/6 streams, one reset each)", got.resets)
 	}
 }
 
@@ -157,10 +180,23 @@ func TestCancelStreamResetsOnlyWhenNotAlreadyReset(t *testing.T) {
 func TestCancelStreamForgetsTheStream(t *testing.T) {
 	// The cancel-before-any-reset case: cancelStream() is the only writer, so it owes the peer the
 	// reset AND owes the connection the slot.
-	if _, stillInMap := countResetsAfterCancel(t, false); stillInMap {
+	got := countResetsAfterCancel(t, false)
+	if got.stillInMap {
 		t.Errorf("didReset=false: the clientStream was still in cc.streams after cancelStream() — " +
 			"cc.forgetStreamID sits inside the same `if` as the reset, so an inverted condition " +
 			"leaks one clientStream and one concurrency slot per cancelled request, for the life " +
 			"of the connection")
+	}
+	// The slot is only half of what forgetStreamID owes. It also closes cs.done and broadcasts on
+	// cc.cond, which is how checkResetOrDone and awaitFlowControl learn the stream is over. Deleting
+	// the map entry by hand satisfies the check above and the Sightglass slot-count parity guard,
+	// and still parks every waiter for the life of the connection — so this fork asserts the signal,
+	// not only the accounting.
+	if !got.doneClosed {
+		t.Errorf("didReset=false: cs.done was still OPEN after cancelStream() returned. Releasing the " +
+			"stream means cc.forgetStreamID, which closes cs.done and broadcasts on cc.cond as well as " +
+			"deleting the map entry; anything that only deletes the map entry frees the concurrency slot " +
+			"and leaves checkResetOrDone and awaitFlowControl blocked forever on a stream that is gone. " +
+			"A wake-up leak is the same class of defect as the slot leak patch 11 exists to close.")
 	}
 }
