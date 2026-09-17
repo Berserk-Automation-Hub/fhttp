@@ -59,6 +59,7 @@ const PHeaderOrderKey = "PHeader-Order:"
 //
 // Values are matched case-insensitively. Like the other magic keys, this one is never written to the
 // wire and is skipped by the HTTP/2 and HTTP/3 encoders.
+// [SIGHTGLASS PATCH 8]
 const HTTP1OmitKey = "HTTP1-Omit:"
 
 // NoAutoHeadersKey is a magic Key that, when present, forbids this package from adding ANY header
@@ -84,6 +85,7 @@ const HTTP1OmitKey = "HTTP1-Omit:"
 // is the honest pairing: this package only decodes what it asked for.
 //
 // Like the other magic keys, it is never written to the wire.
+// [SIGHTGLASS PATCH 8b]
 const NoAutoHeadersKey = "No-Auto-Headers:"
 
 // NoAutoHeaders reports whether the caller has forbidden library-added headers on this request.

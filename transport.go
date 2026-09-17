@@ -1185,7 +1185,7 @@ type wantConn struct {
 	cm        connectMethod
 	key       connectMethodKey   // cm.Key()
 	ctx       context.Context    // context for dial (detached from the request's cancellation)
-	cancelCtx context.CancelFunc // releases ctx once the dial goroutine is done
+	cancelCtx context.CancelFunc // [SIGHTGLASS PATCH 4] (2/3) releases ctx once the dial goroutine is done
 	ready     chan struct{}      // closed when pc, err pair is delivered
 
 	// hooks for testing to know when dials are done
@@ -1344,6 +1344,7 @@ func (t *Transport) getConn(treq *transportRequest, cm connectMethod) (pc *persi
 	// wasted accept+goroutine+failed-handshake on the origin. A detached dial
 	// instead runs to completion and joins the idle pool for a future request.
 	// We keep the request context's VALUES (httptrace, etc.) via WithoutCancel.
+	// [SIGHTGLASS PATCH 4] (1/3)
 	dialCtx, dialCancel := context.WithCancel(context.WithoutCancel(ctx))
 
 	w := &wantConn{
@@ -1459,7 +1460,7 @@ func (t *Transport) dialConnFor(w *wantConn) {
 	// Release the detached dial context once this dial goroutine is done.
 	// Safe on every path: t.dialConn has returned, so an established conn's
 	// lifetime no longer depends on this context (see getConn's WithoutCancel).
-	defer w.cancelCtx()
+	defer w.cancelCtx() // [SIGHTGLASS PATCH 4] (3/3)
 
 	pc, err := t.dialConn(w.ctx, w.cm)
 	delivered := w.tryDeliver(pc, err)
@@ -3117,7 +3118,7 @@ const (
 	zlibLevelBest     = 0xDA
 )
 
-// isZlibHeader applies RFC 1950 2.2's OWN test for a zlib stream header, rather than the list of
+// [SIGHTGLASS PATCH 7] isZlibHeader applies RFC 1950 2.2's OWN test for a zlib stream header, rather than the list of
 // four common CMF/FLG pairs this file used to compare against.
 //
 // The list was both too narrow and too wide, and the narrow half was the visible bug. `deflate` is

@@ -21,7 +21,7 @@ type Encoder struct {
 	// staticNameLastMatch selects which static table a NAME-ONLY lookup resolves against. False
 	// (the default) is first-match. Set by SetStaticNameIndexPolicy.
 	//
-	// [SIGHTGLASS PATCH] see newStaticTable: this is a per-engine wire choice, not a constant.
+	// [SIGHTGLASS PATCH 10] see newStaticTable: this is a per-engine wire choice, not a constant.
 	staticNameLastMatch bool
 
 	dynTab dynamicTable
@@ -148,7 +148,7 @@ func (e *Encoder) SetMaxDynamicTableSizeLimit(v uint32) {
 // SetIndexingPolicy installs a per-field decision on whether to add a header to the dynamic table
 // and emit it with incremental indexing.
 //
-// [SIGHTGLASS PATCH] Upstream indexes everything that is not Sensitive and fits, which is a
+// [SIGHTGLASS PATCH 6] Upstream indexes everything that is not Sensitive and fits, which is a
 // reasonable default and is NOT what a browser does. Real Chrome 153 never incrementally-indexes
 // :path — the value changes on every request, so indexing it would evict useful entries and grow the
 // table for nothing — and never indexes a literal :method. It DOES index :authority, which is stable
@@ -282,7 +282,7 @@ func encodeTypeByte(indexing, sensitive bool) byte {
 // SetStaticNameIndexPolicy selects which STATIC entry a duplicated header NAME resolves to when the
 // encoder emits a literal with an indexed name.
 //
-// [SIGHTGLASS PATCH] lastMatch=false (the default) emits Chrome's choice — :path name index 4,
+// [SIGHTGLASS PATCH 10] lastMatch=false (the default) emits Chrome's choice — :path name index 4,
 // :method 2. lastMatch=true emits upstream's, which is also Firefox's — :path 5, :method 3. The two
 // differ by one byte in every HEADERS block that spells one of those names out, so an engine cannot
 // be emulated with the wrong one. Only the NAME-only lookup is affected; name+value hits and

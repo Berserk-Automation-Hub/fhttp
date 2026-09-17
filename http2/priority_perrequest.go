@@ -1,9 +1,9 @@
 package http2
 
-// PER-REQUEST HEADERS-EMBEDDED PRIORITY (Sightglass additive patch, not upstream fhttp).
+// [SIGHTGLASS PATCH 1] PER-REQUEST HEADERS-EMBEDDED PRIORITY (additive; not upstream fhttp).
 //
-// WHY THIS FILE EXISTS. Upstream fhttp v0.6.8 carries the HTTP/2 HEADERS-embedded PRIORITY on the
-// TRANSPORT: Transport.HeaderPriority (transport.go:94) is dereferenced inside
+// WHY THIS FILE EXISTS. Upstream fhttp v0.6.9 — this fork's base — carries the HTTP/2
+// HEADERS-embedded PRIORITY on the TRANSPORT: Transport.HeaderPriority is dereferenced inside
 // ClientConn.writeHeaders, which runs on the connection's write path under cc.wmu. Consequences:
 //
 //	(1) one *Transport emits ONE weight for every stream it ever opens, and

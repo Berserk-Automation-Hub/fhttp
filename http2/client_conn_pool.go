@@ -75,14 +75,18 @@ func (p *clientConnPool) shouldTraceGetConn(st clientConnIdleState) bool {
 	return !st.freshConn
 }
 
-// PATCH 3 (Sightglass) — the H2 connect must honour the REQUEST's context.
+// [SIGHTGLASS PATCH 5] — the H2 connect must honour the REQUEST's context.
+//
+// (This comment was labelled "PATCH 3" up to and including v0.6.9-sightglass.11. Patch 3 is the
+// stream-concurrency patch in http2/transport.go; this is patch 5. Corrected in .12.)
 //
 // Upstream x/net/http2 threads a context all the way into the dial
-// (dialClientConn(ctx, addr, singleUse), client_conn_pool.go@v0.48.0), so a cancelled request always
+// (dialClientConn(ctx, addr, singleUse), x/net/http2/client_conn_pool.go), so a cancelled request always
 // unblocks: its dial dies and `call.done` closes. This fork carries the pre-2021 pool — the dial
-// takes no context — and the SHIPPED stack makes that unbounded, because tls-client v1.15.1 hands
+// takes no context — and the SHIPPED stack makes that unbounded, because tls-client hands
 // http2.Transport a legacy, context-free DialTLS hook that dials with context.Background()
-// (roundtripper.go:483 dialTLSHTTP2). So a waiter blocked on `<-call.done` waited FOREVER whenever an
+// (roundtripper.go, dialTLSHTTP2 — still true at v1.16.0-sightglass.6). So a waiter blocked on
+// `<-call.done` waited FOREVER whenever an
 // origin stopped completing TLS handshakes: past the request's own deadline, past Client.Timeout,
 // holding a goroutine and a socket each time. PROVEN by parity.TestParityH2DialHonoursRequestContext
 // (loopback origin that serves one h2 conn then stalls every later one): PRE this patch the second

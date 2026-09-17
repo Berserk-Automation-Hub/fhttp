@@ -96,7 +96,7 @@ type Transport struct {
 	// HPACKIndexingPolicy, when non-nil, decides per header field whether the request encoder adds
 	// it to the dynamic table and emits it with incremental indexing.
 	//
-	// [SIGHTGLASS PATCH] The default indexes everything that fits, which no browser does. Real
+	// [SIGHTGLASS PATCH 6] The default indexes everything that fits, which no browser does. Real
 	// Chrome never incrementally-indexes :path — the value changes every request, so indexing it
 	// evicts useful entries for nothing — and never indexes a literal :method, while it DOES index
 	// :authority, which is stable for the connection. The difference is on the wire in the
@@ -110,7 +110,7 @@ type Transport struct {
 	// to for a literal-with-indexed-name. False (default) = first match, which is Chrome's. True =
 	// last match, which is upstream's and Firefox's.
 	//
-	// [SIGHTGLASS PATCH] one byte per HEADERS block, so it is per-engine and must come from the
+	// [SIGHTGLASS PATCH 10] one byte per HEADERS block, so it is per-engine and must come from the
 	// caller's profile rather than from a constant in this package.
 	HPACKStaticNameLastMatch bool
 	HeaderTableSize          uint32 // if nil, will use global initialHeaderTableSize
@@ -426,7 +426,7 @@ type clientStream struct {
 // channel to be signaled. A non-nil error is returned only if the request was
 // canceled.
 //
-// [SIGHTGLASS PATCH] A STREAM THAT FINISHED IS NOT A STREAM THAT WAS CANCELLED, AND CONFUSING THE
+// [SIGHTGLASS PATCH 12] A STREAM THAT FINISHED IS NOT A STREAM THAT WAS CANCELLED, AND CONFUSING THE
 // TWO PUT AN RST_STREAM ON THE WIRE FOR A REQUEST THAT COMPLETED NORMALLY.
 //
 // net/http's own Client cancels a timed request's context as part of FINISHING it: setRequestCancel
@@ -502,7 +502,7 @@ func (cs *clientStream) cancelStream() {
 	cs.didReset = true
 	cc.mu.Unlock()
 
-	// [SIGHTGLASS PATCH] THE CONDITION WAS INVERTED, AND IT PUT A FRAME ON THE WIRE THAT NO BROWSER
+	// [SIGHTGLASS PATCH 11] THE CONDITION WAS INVERTED, AND IT PUT A FRAME ON THE WIRE THAT NO BROWSER
 	// SENDS.
 	//
 	// didReset means "we have ALREADY sent a RST_STREAM for this stream". Resetting when it is true
@@ -916,7 +916,8 @@ func (t *Transport) newClientConn(c net.Conn, addr string, singleUse bool) (*Cli
 	cc.fr.MaxHeaderListSize = t.maxHeaderListSize()
 
 	cc.henc = hpack.NewEncoder(&cc.hbuf)
-	// [SIGHTGLASS PATCH] Install the transport's indexing policy on this connection's request
+	// [SIGHTGLASS PATCH 6+10] Install the transport's indexing and static-name policies on this
+	// connection's request
 	// encoder. Set once at construction: HPACK is stateful, so a policy that changed mid-connection
 	// would desynchronise our dynamic table from the peer's view of it.
 	cc.henc.SetStaticNameIndexPolicy(t.HPACKStaticNameLastMatch)
@@ -1352,7 +1353,7 @@ func (cc *ClientConn) roundTrip(req *http.Request) (res *http.Response, gotErrAf
 
 	cc.wmu.Lock()
 	endStream := !hasBody && !hasTrailers
-	// SIGHTGLASS PATCH (2/2): resolve this request's own HEADERS priority. req is already in scope
+	// SIGHTGLASS PATCH 1 (3/4): resolve this request's own HEADERS priority. req is already in scope
 	// here; upstream simply never looked at it.
 	werr := cc.writeHeaders(cs.ID, endStream, int(cc.maxFrameSize), hdrs, requestHeaderPriority(req))
 	cc.wmu.Unlock()
@@ -1525,7 +1526,7 @@ func (cc *ClientConn) awaitOpenSlotForRequest(req *http.Request) error {
 
 // requires cc.wmu be held
 //
-// SIGHTGLASS PATCH (1/2 of the fhttp diff; see http2/priority_perrequest.go): prio carries the
+// SIGHTGLASS PATCH 1 (1/4; see http2/priority_perrequest.go): prio carries the
 // HEADERS-embedded PRIORITY for THIS stream. nil keeps the upstream behaviour exactly
 // (Transport.HeaderPriority, else fhttp's {exclusive, weight 255, dep 0} default), so nothing changes
 // for a caller that sets no per-request priority.
@@ -1548,7 +1549,7 @@ func (cc *ClientConn) writeHeaders(streamID uint32, endStream bool, maxFrameSize
 			if cc.t.HeaderPriority != nil {
 				defaultHeaderPriorityParam = *cc.t.HeaderPriority
 			}
-			// SIGHTGLASS PATCH: a per-request priority wins over the per-transport one. This is the
+			// SIGHTGLASS PATCH 1 (2/4): a per-request priority wins over the per-transport one. This is the
 			// whole point of the patch — one connection, different weights per stream, like Chrome.
 			if prio != nil {
 				defaultHeaderPriorityParam = *prio
@@ -1766,7 +1767,7 @@ func (cs *clientStream) writeRequestBody(body io.Reader, bodyCloser io.Closer) (
 	// Two ways to send END_STREAM: either with trailers, or
 	// with an empty DATA frame.
 	if len(trls) > 0 {
-		// SIGHTGLASS PATCH: trailers keep the transport-level priority (nil). A trailer HEADERS frame
+		// SIGHTGLASS PATCH 1 (4/4): trailers keep the transport-level priority (nil). A trailer HEADERS frame
 		// is not a new stream and Chrome does not re-prioritise on one.
 		err = cc.writeHeaders(cs.ID, true, maxFrameSize, trls, nil)
 	} else {
@@ -2177,7 +2178,7 @@ func (cc *ClientConn) readLoop() {
 	if ce, ok := cc.readerErr.(ConnectionError); ok {
 		cc.wmu.Lock()
 		cc.fr.WriteGoAway(0, ErrCode(ce), nil)
-		// FLUSH IT. Framer.endWrite writes into cc.bw, a *bufio.Writer, and does not flush; every
+		// [SIGHTGLASS PATCH 9] FLUSH IT. Framer.endWrite writes into cc.bw, a *bufio.Writer, and does not flush; every
 		// other write path in this file calls cc.bw.Flush() explicitly. This one did not, so the
 		// GOAWAY sat in the buffer and the deferred rl.cleanup() closed the connection and
 		// discarded it.
@@ -2584,9 +2585,9 @@ func (b transportResponseBody) Read(p []byte) (n int, err error) {
 
 	// Check the conn-level first, before the stream-level.
 	//
-	// SIGHTGLASS PATCH (A-15) — REPLENISH TO THE FULL CONNECTION WINDOW, NOT TO connFlow.
+	// [SIGHTGLASS PATCH 2] (A-15) — REPLENISH TO THE FULL CONNECTION WINDOW, NOT TO connFlow.
 	//
-	// cc.inflow was seeded at :879 with `cc.connFlow + initialWindowSize`, i.e. the preface
+	// cc.inflow was seeded in newClientConn with `cc.connFlow + initialWindowSize`, i.e. the preface
 	// WINDOW_UPDATE delta PLUS HTTP/2's own 65535-byte default initial window. For a Chrome-152
 	// profile that is 15663105 + 65535 = 15728640 — exactly Chrome's session_max_recv_window_size_.
 	// Upstream then topped the window back up to `cc.connFlow` (15663105) on every refill, so from the

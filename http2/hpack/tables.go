@@ -35,7 +35,7 @@ type headerFieldTable struct {
 
 	// static marks this table as a STATIC table.
 	//
-	// [SIGHTGLASS PATCH] idToIndex used to decide static-vs-dynamic by comparing against the single
+	// [SIGHTGLASS PATCH 10] idToIndex used to decide static-vs-dynamic by comparing against the single
 	// global `staticTable` pointer. There is now more than one static table (see newStaticTable),
 	// and a second one would have been mis-indexed as DYNAMIC — computing len()-k instead of k+1 and
 	// emitting a wrong index for every field. The property is now carried on the table itself.
@@ -216,7 +216,7 @@ func newStaticTable(lastMatch bool) *headerFieldTable {
 	for _, e := range staticTableEntries[:] {
 		t.addEntry(e)
 	}
-	// [SIGHTGLASS PATCH] WHICH static entry a duplicated NAME resolves to is a per-engine choice, so
+	// [SIGHTGLASS PATCH 6+10] WHICH static entry a duplicated NAME resolves to is a per-engine choice, so
 	// it is a parameter here rather than a constant.
 	//
 	// addEntry writes byName[name] unconditionally, so upstream's table resolves a repeated name to

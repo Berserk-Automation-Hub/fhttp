@@ -110,7 +110,7 @@ func TestEncoderSearchTable(t *testing.T) {
 		// Only name match because Sensitive == true. RFC 7541 6.2.1 allows this to match ANY
 		// ":method" entry, which is why the expectation here is an implementation choice rather than
 		// a requirement — upstream's own comment said as much.
-		// [SIGHTGLASS PATCH] newStaticTable now indexes names to their FIRST entry, not their last,
+		// [SIGHTGLASS PATCH 6] newStaticTable now indexes names to their FIRST entry, not their last,
 		// because that is what real Chrome emits on the wire (:method name index 2, :path 4;
 		// measured over 114 :path and 8 :method observations with zero exceptions). The index is
 		// visible in every literal-with-indexed-name representation.

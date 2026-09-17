@@ -3,7 +3,7 @@ module github.com/Berserk-Automation-Hub/fhttp
 go 1.27.0
 
 require (
-	github.com/Berserk-Automation-Hub/utls v1.7.8-sightglass.1
+	github.com/Berserk-Automation-Hub/utls v1.7.8-sightglass.6
 	github.com/andybalholm/brotli v1.2.4
 	github.com/klauspost/compress v1.20.0
 	golang.org/x/net v0.59.0

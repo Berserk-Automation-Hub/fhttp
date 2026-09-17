@@ -19,9 +19,15 @@ package http2
 //     plenty of origins advertise more) sees Chrome cap itself at 256 and sees upstream fhttp take
 //     the advertised number.
 //
-// The two constants live here, in the vendored dependency, because the value has to be applied where
-// the ClientConn is constructed and where SETTINGS is handled — see FHTTP_LAYER_PATCH.md, patch 3.
-// Upstream lines touched: exactly two (transport.go:766 and :2737).
+// The two constants live here, in this fork, because the value has to be applied where the
+// ClientConn is constructed and where SETTINGS is handled — see PATCHES.md, patch 3.
+//
+// Upstream sites touched: exactly THREE lines in http2/transport.go, all carrying a
+// [SIGHTGLASS PATCH 3] marker — the ClientConn literal in newClientConn, the `<` that became `<=`
+// in idleStateLocked, and the clamp in the SETTINGS handler. (Up to and including
+// v0.6.9-sightglass.11 this comment said "exactly two", and cited line numbers that had drifted and
+// pointed at a file named FHTTP_LAYER_PATCH.md that has never existed in this tree. Corrected in
+// .12.)
 const (
 	// ChromeInitialMaxConcurrentStreams is net::kInitialMaxConcurrentStreams.
 	ChromeInitialMaxConcurrentStreams uint32 = 100
@@ -30,7 +36,8 @@ const (
 	ChromeMaxConcurrentStreamLimit uint32 = 256
 )
 
-// chromeClampMaxConcurrentStreams reproduces spdy_session.cc:2356-2357.
+// chromeClampMaxConcurrentStreams reproduces SpdySession::OnSettings' clamp
+// (net/spdy/spdy_session.cc, max_concurrent_streams_ = std::min(value, kMaxConcurrentStreamLimit)).
 func chromeClampMaxConcurrentStreams(advertised uint32) uint32 {
 	if advertised > ChromeMaxConcurrentStreamLimit {
 		return ChromeMaxConcurrentStreamLimit
