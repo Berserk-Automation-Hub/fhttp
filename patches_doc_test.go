@@ -422,26 +422,121 @@ func unique(in []string) []string {
 	return out
 }
 
+// testFileSplitRE reads the front matter's test-file sentence. It matches against a
+// whitespace-collapsed copy of the document so that re-wrapping a paragraph cannot silently stop the
+// guard from finding the sentence it guards — the previous version embedded a literal "\n" at the
+// wrap point, which made the check hostage to a line break.
+var testFileSplitRE = regexp.MustCompile(`\*\*(\d+) ` + "`" + `\*_test\.go` + "`" +
+	` files: (\d+) from upstream \S+, of which (\d+) are byte-identical to upstream, ` +
+	`(\d+) carry nothing but the module-path rewrite and (\d+) are edited, ` +
+	`plus (\d+) added by this fork\.\*\*`)
+
+// docTestFileSplit returns total, upstream, byte-identical, rewrite-only, edited, added as PATCHES.md
+// states them.
+func docTestFileSplit(t *testing.T, doc string) (total, upstream, identical, rewriteOnly, edited, added int) {
+	t.Helper()
+	m := testFileSplitRE.FindStringSubmatch(strings.Join(strings.Fields(doc), " "))
+	if m == nil {
+		t.Fatal(`PATCHES.md no longer states how many *_test.go files this tree carries, how many come from ` +
+			`upstream, how the upstream ones split between byte-identical, rewrite-only and edited, and how ` +
+			`many the fork adds. That sentence exists because its predecessor ("0 test files") was false and ` +
+			`the Maintenance section turned it into an instruction to delete them — and because its ` +
+			`successor ("68 carry nothing but the module-path rewrite") was false too.`)
+	}
+	n := func(i int) int { v, _ := strconv.Atoi(m[i]); return v }
+	return n(1), n(2), n(3), n(4), n(5), n(6)
+}
+
+// TestPatchesMDTestFileSplitIsDerivedFromTheTree measures the split the front matter states, instead
+// of checking that it adds up.
+//
+// The previous guard checked `untouched + edited == upstream` and nothing else. That is an identity,
+// not a measurement: it was green for four published tags while the sentence said "68 carry nothing
+// but the module-path rewrite and 5 are edited" about a tree where 68 is not the count of anything.
+// Only 45 of the 73 upstream test files appear in the diff against the base at all; the remaining 28
+// are byte-identical to upstream because they never mention the module path, and 45 − 5 substantively
+// edited leaves 40 carrying only the rewrite. The correct split has three parts, so the sentence and
+// this guard now both have three.
+func TestPatchesMDTestFileSplitIsDerivedFromTheTree(t *testing.T) {
+	doc := patchesDoc(t)
+	base := docBaseCommit(t, doc)
+	_, upstream, identical, rewriteOnly, edited, added := docTestFileSplit(t, doc)
+
+	status, ok, why := gitDiffNameStatus(t, base)
+	if !ok {
+		t.Skipf("the test-file split is measured against `git diff %s`, and %s. "+
+			"Every other check in this file still ran; this is the only one that cannot.", base[:7], why)
+	}
+
+	upstreamTests, err := exec.Command("git", "ls-tree", "-r", "--name-only", base).Output()
+	if err != nil {
+		t.Fatalf("git ls-tree -r --name-only %s: %v", base, err)
+	}
+	realUpstream := 0
+	for _, p := range strings.Split(string(upstreamTests), "\n") {
+		if strings.HasSuffix(p, "_test.go") {
+			realUpstream++
+		}
+	}
+
+	sub := substantivelyModified(t, base, status)
+	realEdited, realRewriteOnly, realAdded := 0, 0, 0
+	for p, st := range status {
+		if !strings.HasSuffix(p, "_test.go") {
+			continue
+		}
+		switch {
+		case st == "A":
+			realAdded++
+		case st == "M" && sub[p]:
+			realEdited++
+		case st == "M":
+			realRewriteOnly++
+		}
+	}
+	realIdentical := realUpstream - realEdited - realRewriteOnly
+
+	t.Logf("measured against %s: %d upstream test files = %d byte-identical + %d rewrite-only + %d edited; "+
+		"%d added by this fork", base[:7], realUpstream, realIdentical, realRewriteOnly, realEdited, realAdded)
+
+	for _, c := range []struct {
+		what      string
+		doc, tree int
+		why       string
+	}{
+		{"test files kept from upstream", upstream, realUpstream,
+			"This is the count the retracted \"strip tests\" instruction would have destroyed."},
+		{"upstream test files byte-identical to upstream", identical, realIdentical,
+			"A file that never mentions the module path is not in the diff at all. Counting it as " +
+				"\"carrying the rewrite\" is what produced the false 68."},
+		{"upstream test files carrying ONLY the module-path rewrite", rewriteOnly, realRewriteOnly,
+			"This is the number that separates \"we renamed a package\" from \"we changed a test\"."},
+		{"upstream test files this fork edits substantively", edited, realEdited,
+			"Which upstream tests this fork touched is the difference between \"we kept upstream's " +
+				"suite\" and \"we kept the parts of it that still pass\"."},
+		{"test files added by this fork", added, realAdded,
+			"An undocumented added test file is an undocumented guard."},
+	} {
+		if c.doc != c.tree {
+			t.Errorf("PATCHES.md states the number of %s as %d; the tree has %d.\n%s",
+				c.what, c.doc, c.tree, c.why)
+		}
+	}
+}
+
 // TestPatchesMDTestFileCountIsTrue pins the count in the front matter. The claim it replaced —
 // "stripped of *_test.go ... 0 test files" — was not merely stale: the retained upstream suite is
 // what found patch 4b, so a future maintainer who believed it would delete the thing that catches
 // the defects.
 func TestPatchesMDTestFileCountIsTrue(t *testing.T) {
 	doc := patchesDoc(t)
-	m := regexp.MustCompile(`\*\*(\d+) ` + "`" + `\*_test\.go` + "`" + ` files: (\d+) from upstream [^,]+, of which (\d+) carry nothing but the\nmodule-path rewrite and (\d+) are edited, plus (\d+) added by this fork\.\*\*`).FindStringSubmatch(doc)
-	if m == nil {
-		t.Fatal(`PATCHES.md no longer states how many *_test.go files this tree carries, how many come from ` +
-			`upstream and how many the fork adds. That sentence exists because its predecessor ("0 test ` +
-			`files") was false and the Maintenance section turned it into an instruction to delete them.`)
-	}
-	total, _ := strconv.Atoi(m[1])
-	upstream, _ := strconv.Atoi(m[2])
-	untouched, _ := strconv.Atoi(m[3])
-	edited, _ := strconv.Atoi(m[4])
-	added, _ := strconv.Atoi(m[5])
-	if untouched+edited != upstream {
-		t.Errorf("PATCHES.md splits the %d upstream test files into %d untouched + %d edited, which is %d",
-			upstream, untouched, edited, untouched+edited)
+	total, upstream, identical, rewriteOnly, edited, added := docTestFileSplit(t, doc)
+	if identical+rewriteOnly+edited != upstream {
+		t.Errorf("PATCHES.md splits the %d upstream test files into %d byte-identical + %d rewrite-only "+
+			"+ %d edited, which is %d. Note that this is only ARITHMETIC: the identity it checks was "+
+			"green for four tags while the split it checked was a fabrication (68+5 for a tree whose "+
+			"real split is 40+28+5). TestPatchesMDTestFileSplitIsDerivedFromTheTree is what measures it.",
+			upstream, identical, rewriteOnly, edited, identical+rewriteOnly+edited)
 	}
 
 	real := 0
@@ -807,6 +902,12 @@ var retracted = []struct {
 		"HARMFUL. The Maintenance section that said it sat in the MIDDLE of the file, so \"above\" " +
 			"excluded patches 4b, 6, 7, 8, 8b and 10 — six of the fourteen entries.",
 		[]string{"MIDDLE of the file", "six of the fourteen"}},
+	{"68 carry nothing but the module-path rewrite",
+		"FALSE. Only 45 of the 73 upstream test files are in the diff against the base at all; the " +
+			"other 28 are byte-identical to upstream, and 45 minus the 5 edited leaves 40 carrying only " +
+			"the rewrite. 68 was never measured: the guard checked untouched+edited==upstream, an " +
+			"identity any wrong split satisfies.",
+		[]string{"byte-identical to upstream", "45 minus the 5 edited"}},
 }
 
 // retractionMarkers are what a paragraph must say for it to count as RETRACTING, rather than
@@ -823,21 +924,41 @@ var retracted = []struct {
 // which TestRetractionMarkersCannotBeOrdinaryProse enforces mechanically: ALL CAPS, five characters
 // or more. That rules out "wrong", "corrected", "false" and "KEPT" by construction, so the list
 // cannot quietly loosen again.
-var retractionMarkers = []string{"FALSE", "HARMFUL", "RETRACTED", "RETRACTION"}
+//
+// "RETRACTION" used to be a fifth entry and it was the very defect the paragraph above condemns: it
+// occurred ZERO times in PATCHES.md, so it retracted nothing and only padded the list.
+// TestRetractionMarkersAreLoadBearing now fails on any entry that no paragraph of the document
+// actually carries, so a dead marker cannot sit here again.
+var retractionMarkers = []string{"FALSE", "HARMFUL", "RETRACTED"}
 
 // retractionWindow is how close a discriminating phrase has to be to the claim it corrects, and
 // retractionMarkerWindow is how close the ALL-CAPS marker has to be. Presence anywhere in the
 // paragraph was the second half of the hole: a long paragraph can retract one thing and assert
 // another, and the guard could not tell which sentence the marker belonged to.
 //
-// 150 is derived from the document rather than chosen: the largest marker-to-claim distance in
-// PATCHES.md is 123 bytes, at the Maintenance section's quotation of all three retracted
-// instructions at once. It is deliberately tight. A marker two paragraphs away from the claim it is
-// supposed to retract is the failure this pins, so leaving room for one is the wrong instinct — if
-// a future edit pushes a marker past it, move the marker, not the constant.
+// retractionMarkerWindow is DERIVED, and nothing in this comment states the number it is derived
+// from — because a number written in prose is exactly what went wrong here. Up to
+// v0.6.9-sightglass.18 this comment claimed "the largest marker-to-claim distance in PATCHES.md is
+// 123 bytes, at the Maintenance section's quotation of all three retracted instructions at once".
+// That was FALSE and load-bearing: measured with this guard's own window semantics over every
+// retracted claim and every occurrence, the largest is well above 123, and setting the constant to
+// 123 turns TestPatchesMDDoesNotRepeatItsRetractedClaims RED on the document it is supposed to
+// describe. One sentence turned "chosen" into "derived" and the sentence was wrong, so nothing
+// derived it.
+//
+// TestRetractionMarkerWindowIsDerivedFromTheDocument does the deriving now. It measures the widest
+// marker-to-claim distance actually present in PATCHES.md, prints it, and fails unless
+//
+//	measured <= retractionMarkerWindow <= measured + retractionMarkerSlack
+//
+// The lower bound is the guard refusing to be red on its own document. The upper bound is what
+// keeps the constant tight: a marker two paragraphs away from the claim it is supposed to retract is
+// the failure this pins, and widening the constant to admit one is the wrong instinct, so the
+// slack is small enough that the fix has to be moving the marker.
 const (
 	retractionWindow       = 400
 	retractionMarkerWindow = 150
+	retractionMarkerSlack  = 15
 )
 
 // TestRetractionMarkersCannotBeOrdinaryProse is the guard ON the guard below. Without it,
@@ -854,6 +975,192 @@ func TestRetractionMarkersCannotBeOrdinaryProse(t *testing.T) {
 				"characters, so that it cannot be satisfied by a word a writer uses for something else. "+
 				"%q was added to this list once and it let a retracted claim be re-asserted verbatim.", w, "wrong")
 		}
+	}
+}
+
+// TestRetractionMarkersAreLoadBearing is the third guard ON the list, and it closes the defect the
+// comment above `retractionMarkers` describes but did not enforce. "RETRACTION" sat in that list
+// through four tags and occurred ZERO times in PATCHES.md: it could never retract anything, it only
+// made the list look thorough. A marker nothing in the document carries is a dead entry, and a dead
+// entry is how a list that is too loose stays looking rigorous.
+func TestRetractionMarkersAreLoadBearing(t *testing.T) {
+	doc := patchesDoc(t)
+	for _, w := range retractionMarkers {
+		if !strings.Contains(doc, w) {
+			t.Errorf("retraction marker %q does not occur anywhere in %s, so it retracts nothing and "+
+				"only pads the list. Remove it, or write the retraction that uses it. %q was such an "+
+				"entry for four tags.", w, patchesFile, "RETRACTION")
+		}
+	}
+}
+
+var paraSplitRE = regexp.MustCompile(`\n\s*\n`)
+
+func paragraphsOf(doc string) []string { return paraSplitRE.Split(doc, -1) }
+
+// minMarkerWindow reports the SMALLEST w for which retractionNear's window `para[at-w : at+n+w]`
+// contains a retraction marker, or -1 when the paragraph carries no marker at all.
+//
+// It is the inverse of the check retractionNear performs, and retractionNear is written in terms of
+// it so the two cannot drift apart: what the guard accepts and what the derivation measures are the
+// same function of the same document.
+func minMarkerWindow(para string, at, n int) int {
+	best := -1
+	for _, m := range retractionMarkers {
+		for off := 0; ; {
+			i := strings.Index(para[off:], m)
+			if i < 0 {
+				break
+			}
+			j := off + i
+			off = j + len(m)
+			// The window reaches a marker at [j, j+len(m)) once w >= at-j (to the left) and
+			// w >= j+len(m)-(at+n) (to the right). Clamping at the paragraph edges never makes a
+			// marker harder to reach, so no special case is needed for it.
+			need := 0
+			if d := at - j; d > need {
+				need = d
+			}
+			if d := j + len(m) - (at + n); d > need {
+				need = d
+			}
+			if best < 0 || need < best {
+				best = need
+			}
+		}
+	}
+	return best
+}
+
+// TestRetractionMarkerWindowIsDerivedFromTheDocument is what makes retractionMarkerWindow a
+// measurement instead of a number somebody liked.
+//
+// The constant used to be justified by one sentence of prose — "the largest marker-to-claim distance
+// in PATCHES.md is 123 bytes" — and that sentence was false. Nothing computed it, nothing rechecked
+// it, and the document had since grown a paragraph whose widest distance is larger; set the constant
+// to the claimed 123 and TestPatchesMDDoesNotRepeatItsRetractedClaims goes red on PATCHES.md itself,
+// twice. A derivation that only a human performed once is not a derivation.
+//
+// This measures it on every run, prints it, and brackets the constant from both sides: at least the
+// measurement (or the guard is red on its own document) and at most the measurement plus
+// retractionMarkerSlack (or the constant has been widened to admit a marker that should have been
+// moved instead).
+func TestRetractionMarkerWindowIsDerivedFromTheDocument(t *testing.T) {
+	doc := patchesDoc(t)
+	worst, worstClaim, checked := -1, "", 0
+	for _, r := range retracted {
+		for _, para := range paragraphsOf(doc) {
+			for off := 0; ; {
+				i := strings.Index(para[off:], r.claim)
+				if i < 0 {
+					break
+				}
+				at := off + i
+				off = at + len(r.claim)
+				w := minMarkerWindow(para, at, len(r.claim))
+				if w < 0 {
+					// No marker anywhere in the paragraph. That is
+					// TestPatchesMDDoesNotRepeatItsRetractedClaims's failure to report, not this
+					// one's, and reporting it here too would just double the noise.
+					continue
+				}
+				checked++
+				if w > worst {
+					worst, worstClaim = w, r.claim
+				}
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no retracted claim occurs in PATCHES.md beside any marker, so there is nothing to " +
+			"derive the window from. Either the retractions have been deleted or `retracted` no longer " +
+			"describes this document; both are worse than a wrong constant.")
+	}
+	t.Logf("widest marker-to-claim distance in %s: %d bytes over %d occurrences (claim %q). "+
+		"retractionMarkerWindow = %d, slack %d of %d permitted.",
+		patchesFile, worst, checked, worstClaim, retractionMarkerWindow,
+		retractionMarkerWindow-worst, retractionMarkerSlack)
+	if worst > retractionMarkerWindow {
+		t.Errorf("retractionMarkerWindow is %d, but the widest marker-to-claim distance PATCHES.md "+
+			"actually contains is %d bytes, at the claim %q. The guard is therefore RED on the very "+
+			"document it describes: a legitimate retraction is being reported as a re-assertion. "+
+			"Raise the constant to %d (and no further), or move that marker closer to the claim.",
+			retractionMarkerWindow, worst, worstClaim, worst)
+	}
+	if retractionMarkerWindow > worst+retractionMarkerSlack {
+		t.Errorf("retractionMarkerWindow is %d but the document only needs %d, which is %d bytes of "+
+			"slack against a permitted %d. A window loose enough to reach a marker the document never "+
+			"puts there is a window that will one day reach a marker retracting something else — the "+
+			"exact hole this guard was rewritten to close. Set it to %d.",
+			retractionMarkerWindow, worst, retractionMarkerWindow-worst, retractionMarkerSlack,
+			worst+retractionMarkerSlack)
+	}
+}
+
+// TestPatchesMDStatesTheWindowsItIsGuardedBy binds the front matter's description of this guard to
+// the guard. PATCHES.md tells the reader that a marker must sit "within 150 bytes" and a
+// discriminating phrase "within 400"; those two numbers and the list of markers were prose that
+// nothing checked, so a change to either constant would have left the document quietly describing a
+// guard that no longer exists.
+func TestPatchesMDStatesTheWindowsItIsGuardedBy(t *testing.T) {
+	doc := patchesDoc(t)
+	flat := strings.Join(strings.Fields(doc), " ")
+	m := regexp.MustCompile(`it is QUOTED, not stated; a ([A-Z/ ]+) marker sits within (\d+) bytes of it; ` +
+		`and a phrase out of THAT claim's own correction sits within (\d+)`).FindStringSubmatch(flat)
+	if m == nil {
+		t.Fatal("PATCHES.md no longer states the three conditions its retraction guard applies, or no " +
+			"longer states them in the form this test reads. That sentence is how a reader knows what " +
+			"\"RETRACTED\" in this file is worth; it is not decoration.")
+	}
+	var named []string
+	for _, w := range strings.Fields(m[1]) {
+		if w != "/" {
+			named = append(named, w)
+		}
+	}
+	sort.Strings(named)
+	want := append([]string(nil), retractionMarkers...)
+	sort.Strings(want)
+	if strings.Join(named, ",") != strings.Join(want, ",") {
+		t.Errorf("PATCHES.md says the markers are %v; retractionMarkers is %v. The document has to name "+
+			"the markers the guard actually accepts, or a reader who follows it writes a retraction the "+
+			"guard rejects — or, worse, believes a word that is not a marker retracts something.",
+			named, want)
+	}
+	if got, _ := strconv.Atoi(m[2]); got != retractionMarkerWindow {
+		t.Errorf("PATCHES.md says a marker must sit within %d bytes of the claim; retractionMarkerWindow "+
+			"is %d.", got, retractionMarkerWindow)
+	}
+	if got, _ := strconv.Atoi(m[3]); got != retractionWindow {
+		t.Errorf("PATCHES.md says a discriminating phrase must sit within %d bytes of the claim; "+
+			"retractionWindow is %d.", got, retractionWindow)
+	}
+
+	// The same paragraph states how many markers there are and how often they occur, and that pair is
+	// the whole reason the window exists: it is BECAUSE the markers are common that proximity alone
+	// was not association. It used to read "Those four markers occur thirty-odd times" — a count of a
+	// list that has three entries, written as a word so that no count guard could read it, which is
+	// T0534's defect verbatim.
+	c := regexp.MustCompile(`Those (\d+) markers occur (\d+) times in this file`).FindStringSubmatch(flat)
+	if c == nil {
+		t.Fatal("PATCHES.md no longer says how many retraction markers there are and how often they " +
+			"occur. That sentence is the justification for retractionMarkerWindow existing at all — the " +
+			"markers are common, so nearness to one proves nothing by itself — and it must be a pair of " +
+			"digits, because the previous version wrote it as \"Those four markers occur thirty-odd " +
+			"times\" for a list of three and no count guard could read either number.")
+	}
+	if got, _ := strconv.Atoi(c[1]); got != len(retractionMarkers) {
+		t.Errorf("PATCHES.md says there are %d retraction markers; retractionMarkers has %d: %v",
+			got, len(retractionMarkers), retractionMarkers)
+	}
+	occurrences := 0
+	for _, w := range retractionMarkers {
+		occurrences += strings.Count(doc, w)
+	}
+	if got, _ := strconv.Atoi(c[2]); got != occurrences {
+		t.Errorf("PATCHES.md says its retraction markers occur %d times; they occur %d. How common the "+
+			"markers are is the reason the window is tight, so this is not a decorative number.",
+			got, occurrences)
 	}
 }
 
@@ -905,12 +1212,11 @@ func retractionNear(para string, at, n int, discriminators []string) (marker, di
 		}
 		return para[lo:hi]
 	}
-	near := window(retractionMarkerWindow)
-	for _, w := range retractionMarkers {
-		if strings.Contains(near, w) {
-			marker = true
-			break
-		}
+	// Expressed through minMarkerWindow so that TestRetractionMarkerWindowIsDerivedFromTheDocument
+	// measures exactly what this accepts. A second copy of the window arithmetic here is how the
+	// constant and its justification came apart in the first place.
+	if w := minMarkerWindow(para, at, n); w >= 0 && w <= retractionMarkerWindow {
+		marker = true
 	}
 	wide := window(retractionWindow)
 	for _, d := range discriminators {
@@ -1121,6 +1427,221 @@ func TestPatchesMDCitesNoLineNumbersIntoThisTree(t *testing.T) {
 				"patches move each other's code. Cite the function and its [SIGHTGLASS PATCH n] marker instead.",
 				file, unique(bad))
 		}
+	}
+}
+
+// testCallRE matches the opening of a testing call, which is the only kind of source line a
+// `file.go:NNN:` prefix in Go test output can ever name.
+var testCallRE = regexp.MustCompile(`\bt\.(Error|Errorf|Fatal|Fatalf|Log|Logf|Skip|Skipf)\(`)
+
+// goStringJoinRE matches the concatenation joint between two adjacent Go string literals, including
+// the line break and indentation gofmt puts there. Removing it reassembles the message the test
+// actually prints from the source that prints it.
+var goStringJoinRE = regexp.MustCompile(`"\s*\+\s*"`)
+
+// docCitationRE matches one quoted `file.go:NNN: message` line of test output inside a fenced block.
+var docCitationRE = regexp.MustCompile(`([A-Za-z0-9_./]+\.go):(\d+): (.*)`)
+
+// formatVerbRE matches a printf verb, which is the only place a published line of test output is
+// allowed to differ from the source that printed it.
+var formatVerbRE = regexp.MustCompile(`%[-+# 0-9.*]*[a-zA-Z]`)
+
+// sourceMessageAt reassembles the message printed by the testing call starting at line n of src, as
+// literal segments separated by the format verbs that were substituted at run time.
+func sourceMessageAt(src string, n int) []string {
+	lines := strings.Split(src, "\n")
+	if n < 1 || n > len(lines) {
+		return nil
+	}
+	hi := n + 15
+	if hi > len(lines) {
+		hi = len(lines)
+	}
+	win := strings.Join(lines[n-1:hi], "\n")
+	// Everything before the call's opening parenthesis is code, not message.
+	loc := testCallRE.FindStringIndex(win)
+	if loc == nil {
+		return nil
+	}
+	win = strings.Join(strings.Fields(concatenatedLiteral(win[loc[1]:])), " ")
+	var segs []string
+	for _, seg := range formatVerbRE.Split(win, -1) {
+		segs = append(segs, strings.TrimSpace(seg))
+	}
+	return segs
+}
+
+// concatenatedLiteral reads the run of Go string literals joined by `+` that begins at the start of
+// s, and returns the string they denote. It stops at the first thing that is not a literal, `+` or
+// whitespace — the closing paren, a comma, an argument — so the message does not run on into the
+// code that follows it. Reading a fixed number of lines instead is what made the first version of
+// this guard report a whole function body as the "message".
+func concatenatedLiteral(s string) string {
+	var out strings.Builder
+	for i := 0; i < len(s); {
+		switch c := s[i]; {
+		case c == '"':
+			i++
+			for i < len(s) {
+				if s[i] == '\\' && i+1 < len(s) {
+					switch s[i+1] {
+					case 'n', 't', 'r':
+						out.WriteByte(' ') // a newline in the output is whitespace here
+					default:
+						out.WriteByte(s[i+1])
+					}
+					i += 2
+					continue
+				}
+				if s[i] == '"' {
+					i++
+					break
+				}
+				out.WriteByte(s[i])
+				i++
+			}
+		case c == '+' || c == ' ' || c == '\t' || c == '\n' || c == '\r':
+			i++
+		default:
+			return out.String()
+		}
+	}
+	return out.String()
+}
+
+// resolveInTree turns a citation like `cancel_stream_reset_test.go` into the path it names, so a
+// bare basename is checked rather than silently skipped. fileLineCount and the older citation guard
+// both read the citation as written, which meant every basename citation — which is all of them —
+// got a free pass from the line-count half of that check.
+func resolveInTree(rel string) string {
+	if fi, err := os.Stat(rel); err == nil && !fi.IsDir() {
+		return rel
+	}
+	found := ""
+	_ = filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
+		if err != nil || found != "" {
+			return nil
+		}
+		if info.IsDir() {
+			if info.Name() == ".git" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if filepath.Base(path) == rel {
+			found = path
+		}
+		return nil
+	})
+	return found
+}
+
+// TestPatchesMDQuotedAblationOutputIsReproducible closes the hole that
+// TestPatchesMDCitesNoLineNumbersIntoThisTree's own comment warns about and then walks through.
+//
+// That test exempts fenced blocks, on the correct grounds that quoted machine output is a record and
+// not a citation, and checks only that a quoted line number is inside the file it names. It is not
+// enough, and the failure was live: PATCHES.md published patch 11's ablation as
+// `cancel_stream_reset_test.go:161: didReset=false: the clientStream was still in cc.streams…`
+// long after that assertion had moved to a different line AND grown a second error line the block
+// did not show. 161 was still inside the file, so the guard passed on a record of a run nobody could
+// reproduce — which is precisely what C3 asks a published ablation not to be.
+//
+// The rule here is the one the exemption needs: a quoted `file.go:NNN:` must land on a testing call,
+// and the message quoted after it must be the message THAT call prints. Format verbs are the only
+// slack — the doc shows the substituted value, the source shows `%d` — so the comparison uses the
+// longest verb-free, digit-free prefix of the quoted message.
+func TestPatchesMDQuotedAblationOutputIsReproducible(t *testing.T) {
+	doc := patchesDoc(t)
+	prose := stripFencedBlocks(doc)
+	checked := 0
+	for _, m := range docCitationRE.FindAllStringSubmatch(doc, -1) {
+		file, lineStr, msg := m[1], m[2], m[3]
+		if !fileExistsInTree(file) {
+			continue
+		}
+		if strings.Contains(prose, m[0]) {
+			continue // prose, not a fenced block: the other guard bans it outright
+		}
+		n, _ := strconv.Atoi(lineStr)
+		path := resolveInTree(file)
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Errorf("PATCHES.md quotes output from %s, which cannot be read: %v", file, err)
+			continue
+		}
+		src := string(b)
+		lines := strings.Split(src, "\n")
+		if n < 1 || n > len(lines) {
+			t.Errorf("PATCHES.md quotes %s:%d, and %s has %d lines. Output quoted from a tree that has "+
+				"since moved is a record of a run nobody can reproduce.", file, n, file, len(lines))
+			continue
+		}
+		checked++
+		if !testCallRE.MatchString(lines[n-1]) {
+			t.Errorf("PATCHES.md quotes test output as coming from %s:%d, but line %d of that file is "+
+				"not a t.Error/t.Fatal/t.Log call:\n  %s\nGo test output names the line of the call that "+
+				"printed it, so this block is output from a different revision of the file.",
+				file, n, n, strings.TrimSpace(lines[n-1]))
+			continue
+		}
+		// The message is compared segment by segment, where the segments are what the source says
+		// literally and the gaps are the printf verbs whose values only exist at run time. The quoted
+		// line may stop early — Go test output wraps and a document quotes what fits — so a segment
+		// the doc never reaches is not a failure; a segment it contradicts is.
+		docNorm := strings.Join(strings.Fields(msg), " ")
+		segs := sourceMessageAt(src, n)
+		if len(segs) == 0 {
+			t.Errorf("PATCHES.md quotes %s:%d, but no message could be read out of the call there.", file, n)
+			continue
+		}
+		// The document may wrap mid-segment — Go test output is long and PATCHES.md is prose — so
+		// the two only have to AGREE as far as the shorter of them goes.
+		if segs[0] != "" && !strings.HasPrefix(docNorm, segs[0]) && !strings.HasPrefix(segs[0], docNorm) {
+			t.Errorf("PATCHES.md publishes this as the output of %s:%d:\n  %s\n"+
+				"but the call at %s:%d starts:\n  %s\n"+
+				"A published ablation record is only worth anything if re-running it produces the text in "+
+				"the document; this is the text of a run nobody can reproduce. PATCHES.md carried "+
+				"`cancel_stream_reset_test.go:161` for two tags after that assertion had moved, and the "+
+				"line-number check waved it through because 161 was still inside the file.",
+				file, n, squash(msg), file, n, squash(segs[0]))
+			continue
+		}
+		agreed, pos := 0, 0
+		if segs[0] != "" {
+			agreed = len(segs[0])
+			if len(docNorm) < agreed {
+				agreed = len(docNorm)
+			}
+			pos = agreed
+		}
+		truncated := false
+		for _, seg := range segs[1:] {
+			if len(seg) < 4 {
+				continue // punctuation between two substituted values proves nothing either way
+			}
+			i := strings.Index(docNorm[pos:], seg)
+			if i < 0 {
+				truncated = true // the quoted line stopped before this segment
+				break
+			}
+			pos += i + len(seg)
+			agreed += len(seg)
+		}
+		// Twenty literal characters is enough on its own. Below that the message is mostly
+		// substituted values — `d.search(%v) = %v, %v; want %v, %v` has nine — and the check is that
+		// EVERY literal fragment the quoted line was long enough to reach is present, in order.
+		if agreed < 20 && (truncated || agreed < 6) {
+			t.Errorf("PATCHES.md publishes this as the output of %s:%d:\n  %s\n"+
+				"and only %d characters of it are literal text the message at %s:%d contains:\n  %v\n"+
+				"Quote enough of the output for it to be checkable against the guard that prints it.",
+				file, n, squash(msg), agreed, file, n, segs)
+		}
+	}
+	if checked == 0 {
+		t.Error("no quoted `file.go:NNN:` test output was found in PATCHES.md's fenced blocks. The " +
+			"ablation records are the evidence this document rests on; a file with none of them is not " +
+			"a provenance record, and this guard has nothing to check.")
 	}
 }
 
