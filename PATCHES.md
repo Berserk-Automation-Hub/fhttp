@@ -124,9 +124,9 @@ can see the two halves:
 
 | what | checked by | where |
 |---|---|---|
-| every unprefixed `TestX` this file names exists in THIS tree | `TestPatchesMDNamesGuardsThatExist` | here |
+| every unprefixed `Test…` name this file uses as a guard exists in THIS tree | `TestPatchesMDNamesGuardsThatExist` | here |
 | every backticked `…_test.go` path named in THIS table exists on disk | `TestPatchesMDGuardTableNamesFilesThatExist` | here |
-| every `parity.TestX` / `sightglass.TestX` this file names resolves to a real `func Test…` in `go/` | `parity.TestForkPATCHESNamesSightglassGuardsThatExist` | Sightglass, reading this file out of the module cache |
+| every `parity.` / `sightglass.` prefixed `Test…` name this file uses resolves to a real `func Test…` in `go/` | `parity.TestForkPATCHESNamesSightglassGuardsThatExist` | Sightglass, reading this file out of the module cache |
 
 | patch | guard in THIS fork | guard in Sightglass (shipped path) |
 |---|---|---|
@@ -1485,7 +1485,7 @@ running total. The measurement for the tree as it stands is here, and it is the 
 command: GOTOOLCHAIN=auto go test ./... -count=1 -timeout 60m
          same machine, one run after the other, never concurrently
 before:  v0.6.9-sightglass.11 in a clean worktree of the published tag (895d5a8)
-after:   v0.6.9-sightglass.15, this tree
+after:   v0.6.9-sightglass.16, this tree
 
 before:  36 failing tests   root package 654.622s   (TestOmitHTTP2 FAILED, 601s of that 654s)
 after:   35 failing tests   root package  51.329s   (TestOmitHTTP2 PASSED)
