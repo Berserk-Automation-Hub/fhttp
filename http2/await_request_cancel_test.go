@@ -1,5 +1,7 @@
 package http2
 
+// [SIGHTGLASS PATCH 12] this file is patch 12's fork-local guard.
+
 // awaitRequestCancel MUST NOT REPORT A CANCELLATION FOR A STREAM THAT HAS ALREADY FINISHED.
 //
 // The whole reason this matters is one line in net/http's own Client: setRequestCancel builds

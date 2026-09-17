@@ -1,5 +1,7 @@
 package http
 
+// [SIGHTGLASS PATCH 8b] this file is patch 8b's fork-local guard.
+
 import (
 	"bytes"
 	"strings"

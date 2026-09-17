@@ -516,6 +516,9 @@ func (t *Transport) roundTrip(req *Request) (*Response, error) {
 		for k, vv := range req.Header {
 			if !httpguts.ValidHeaderFieldName(k) {
 				// Allow the HeaderOrderKey and PHeaderOrderKey magic string, this will be handled further.
+				// [SIGHTGLASS PATCH 8+8b] HTTP1OmitKey and NoAutoHeadersKey end in ':', which
+				// httpguts.ValidHeaderFieldName rejects. Without this allowance every HTTP/1.1
+				// request carrying one of them fails before it is written.
 				if k == HeaderOrderKey || k == PHeaderOrderKey || k == HTTP1OmitKey || k == NoAutoHeadersKey {
 					continue
 				}
@@ -2572,6 +2575,7 @@ func (pc *persistConn) roundTrip(req *transportRequest) (resp *Response, err err
 
 	requestedGzip := false
 	if !pc.t.DisableCompression &&
+		// [SIGHTGLASS PATCH 8b] the caller stated an exact block; do not add Accept-Encoding to it.
 		!req.Header.NoAutoHeaders() &&
 		req.Header.Get("Accept-Encoding") == "" &&
 		req.Header.get("accept-encoding") == "" &&

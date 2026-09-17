@@ -1,5 +1,7 @@
 package http_test
 
+// [SIGHTGLASS PATCH 8] this file is patch 8's fork-local guard.
+
 // HTTP1OmitKey drops a header on HTTP/1.1 and leaves it alone on HTTP/2.
 //
 // Some headers are protocol-scoped in a direction the existing machinery cannot express.

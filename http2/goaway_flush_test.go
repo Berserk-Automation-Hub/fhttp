@@ -1,5 +1,7 @@
 package http2
 
+// [SIGHTGLASS PATCH 9] this file is patch 9's fork-local guard.
+
 // A CONNECTION-LEVEL PROTOCOL ERROR MUST PUT ITS GOAWAY ON THE WIRE.
 //
 // readLoop answers a ConnectionError by writing GOAWAY and then returning, at which point the

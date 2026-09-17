@@ -1,5 +1,7 @@
 package http2
 
+// [SIGHTGLASS PATCH 11] this file is patch 11's fork-local guard.
+
 // cancelStream() MUST RESET A STREAM EXACTLY WHEN IT HAS NOT ALREADY BEEN RESET.
 //
 // `didReset` means "we have already sent a RST_STREAM for this stream", so the reset belongs on the

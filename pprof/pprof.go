@@ -333,6 +333,8 @@ func collectProfile(p *pprof.Profile) (*profile.Profile, error) {
 	return p0, nil
 }
 
+// [SIGHTGLASS PATCH 4b] Go 1.27 added the goroutineleak profile. Without its entry here and in
+// profileDescriptions below, upstream's own TestDescriptions fails on a current toolchain.
 var profileSupportsDelta = map[handler]bool{
 	"allocs":        true,
 	"block":         true,

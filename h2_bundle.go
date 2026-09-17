@@ -8360,6 +8360,7 @@ func (cc *http2ClientConn) writeHeaders(streamID uint32, endStream bool, maxFram
 func (cc *http2ClientConn) requestGzip(req *Request) bool {
 	// TODO(bradfitz): this is a copy of the logic in net/http. Unify somewhere?
 	if !cc.t.disableCompression() &&
+		// [SIGHTGLASS PATCH 8b] the caller stated an exact block; do not ask for gzip on its behalf.
 		!req.Header.NoAutoHeaders() &&
 		req.Header.Get("Accept-Encoding") == "" &&
 		req.Header.Get("Range") == "" &&
@@ -8630,6 +8631,8 @@ func (cc *http2ClientConn) encodeHeaders(req *Request, addGzipHeader bool, trail
 		if !httpguts.ValidHeaderFieldName(k) {
 			// If the header is magic key, the headers would have been ordered
 			// by this step. It is ok to delete and not raise an error
+			// [SIGHTGLASS PATCH 8+8b] package http's own copy of the HTTP/2 encoder needs the same
+			// allowance as fhttp/http2, or a request carrying either magic key fails validation.
 			if k == HeaderOrderKey || k == PHeaderOrderKey || k == HTTP1OmitKey || k == NoAutoHeadersKey {
 				continue
 			}
@@ -8783,6 +8786,7 @@ func (cc *http2ClientConn) encodeHeaders(req *Request, addGzipHeader bool, trail
 			}
 		}
 
+		// [SIGHTGLASS PATCH 8b] the caller stated an exact block; do not add user-agent to it.
 		if !didUA && !req.Header.NoAutoHeaders() {
 			f("user-agent", http2defaultUserAgent)
 		}
@@ -8811,6 +8815,7 @@ func (cc *http2ClientConn) encodeHeaders(req *Request, addGzipHeader bool, trail
 		// HTTP1OmitKey was missing here: package http's own HTTP/2 encoder wrote the magic key as
 		// a field (`http1-omit:: priority`), which is not a legal HPACK name. fhttp/http2 — the
 		// package tls-client drives — already skipped it; this copy did not.
+		// [SIGHTGLASS PATCH 8+8b] see the comment above: HTTP1OmitKey was missing from this list.
 		if name == PHeaderOrderKey || name == HeaderOrderKey || name == HTTP1OmitKey || name == NoAutoHeadersKey {
 			return
 		}

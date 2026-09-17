@@ -1864,6 +1864,8 @@ func TestServerRejectsContentLengthWithSignNewRequests(t *testing.T) {
 			}
 			checkReq := func(r *http.Request) {
 				if r.ContentLength != tt.wantCL {
+					// [SIGHTGLASS PATCH 4b] r.ContentLength is an int64; the current vet rejects %q on it, and
+					// `go test` runs vet, so this one verb made the whole http2 package report [build failed].
 					t.Fatalf("Got: %d\nWant: %d", r.ContentLength, tt.wantCL)
 				}
 			}

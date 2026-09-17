@@ -1913,6 +1913,9 @@ func TestClientPropagatesTimeoutToContext(t *testing.T) {
 }
 
 // testRoundTripper is the upstream helper this test needs; fhttp's fork predates it.
+// [SIGHTGLASS PATCH 4b] TestClientPropagatesTimeoutToContext now asserts the deadline on
+// req.Context() rather than inside DialContext, which is what upstream rewrote it to when it
+// detached the dial from request cancellation. This helper is upstream's; the fork predates it.
 type testRoundTripper func(*Request) (*Response, error)
 
 func (t testRoundTripper) RoundTrip(req *Request) (*Response, error) {

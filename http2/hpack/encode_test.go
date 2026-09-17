@@ -112,7 +112,7 @@ func TestEncoderSearchTable(t *testing.T) {
 		// a requirement — upstream's own comment said as much.
 		// [SIGHTGLASS PATCH 6] newStaticTable now indexes names to their FIRST entry, not their last,
 		// because that is what real Chrome emits on the wire (:method name index 2, :path 4;
-		// measured over 114 :path and 8 :method observations with zero exceptions). The index is
+		// measured over 130 :path and 8 :method observations with zero exceptions). The index is
 		// visible in every literal-with-indexed-name representation.
 		{HeaderField{":method", "GET", true}, 2, false},
 

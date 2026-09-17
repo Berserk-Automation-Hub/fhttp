@@ -1476,6 +1476,7 @@ func TestTransportProxyHTTPSConnectLeak(t *testing.T) {
 	// because the dial is deliberately detached from it (patch 4). The CONNECT is instead bounded
 	// by its own timeout (patch 4b), so this test drives THAT bound rather than cancelling the
 	// request — exactly as upstream Go rewrote it when it made the same change.
+	// [SIGHTGLASS PATCH 4b]
 	cancelc := make(chan struct{})
 	SetTestHookProxyConnectTimeout(t, func(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
 		ctx, cancel := context.WithCancel(ctx)

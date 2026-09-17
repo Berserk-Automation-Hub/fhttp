@@ -1,5 +1,7 @@
 package hpack
 
+// [SIGHTGLASS PATCH 10] this file is patch 10's fork-local guard.
+
 import (
 	"bytes"
 	"testing"

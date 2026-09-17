@@ -227,11 +227,14 @@ func newStaticTable(lastMatch bool) *headerFieldTable {
 	// Both choices are real, and an earlier revision of this patch hardcoded the first because that
 	// is what Chrome does — which put ONE BROWSER'S IDENTITY into the stack as a constant:
 	//
-	//   Chrome 153  FIRST match: :path name index 4, :method name index 2. 114 :path and 8 :method
-	//               observations across two captures, zero exceptions.
+	//   Chrome 153  FIRST match: :path name index 4, :method name index 2. 130 :path and 8 :method
+	//               literal-with-indexed-name observations across four captures, zero exceptions.
 	//   Firefox 156 LAST  match: :path name index 5 (leading byte 0x05 = literal-without-indexing,
 	//               4-bit name index 5, where a first-match encoder emits 0x04). 41 of 41 attributed
-	//               HEADERS blocks, confirmed independently by the tshark HPACK dissector.
+	//               HEADERS blocks, :method index 3 on both of its 2.
+	//
+	// Both rows are RE-DERIVED from the captures under groundtruth/out rather than remembered; the
+	// command and the attribution rule are in PATCHES.md under "Ground truth".
 	//
 	// Only byName differs between the two; ents and byNameValue are identical, so a name+value hit
 	// is unaffected and DECODING is unaffected (hpack.go indexes ents positionally).

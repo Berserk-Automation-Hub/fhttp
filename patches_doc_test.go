@@ -314,6 +314,22 @@ func TestPatchesMDPatchNumbersMatchTheSourceMarkers(t *testing.T) {
 
 var goTestNameRE = regexp.MustCompile(`\bTest[A-Z][A-Za-z0-9_]*`)
 
+// runPatternRE finds the argument of every `go test -run` in the document, quoted or bare.
+var runPatternRE = regexp.MustCompile(`-run\s+(?:'([^']+)'|"([^"]+)"|(\S+))`)
+
+// runPatterns returns every alternative of every `-run` argument in the document. These are
+// PATTERNS, not test names: `-run 'TestParityHTTP2'` legitimately names no function.
+func runPatterns(doc string) map[string]bool {
+	out := map[string]bool{}
+	for _, m := range runPatternRE.FindAllStringSubmatch(doc, -1) {
+		arg := m[1] + m[2] + m[3]
+		for _, alt := range strings.Split(arg, "|") {
+			out[strings.Trim(alt, "^$")] = true
+		}
+	}
+	return out
+}
+
 // TestPatchesMDNamesGuardsThatExist checks that every Go test PATCHES.md names as a guard is a test
 // that actually exists in this fork. `parity.*` guards live in Sightglass, not here.
 func TestPatchesMDNamesGuardsThatExist(t *testing.T) {
@@ -368,6 +384,21 @@ func TestPatchesMDNamesGuardsThatExist(t *testing.T) {
 		if strings.Contains(doc, "parity."+name) || strings.Contains(doc, "sightglass."+name) ||
 			strings.Contains(doc, "tlsemu."+name) {
 			continue
+		}
+		// A `go test -run` PATTERN rather than a test name. Both conditions are required: it has to be
+		// written as a -run argument in this file AND it has to match at least one test that really is
+		// in this tree, so "-run TestNothingLikeThis" is still a ghost.
+		if runPatterns(doc)[name] {
+			matches := false
+			for real := range have {
+				if real != name && strings.HasPrefix(real, name) {
+					matches = true
+					break
+				}
+			}
+			if matches {
+				continue
+			}
 		}
 		ghosts = append(ghosts, name)
 	}
@@ -499,39 +530,109 @@ var retracted = []struct {
 			"excluded patches 4b, 6, 7, 8, 8b and 10 — six of the fourteen entries."},
 }
 
-// retractionWords are what a paragraph must say for it to count as retracting, rather than repeating,
-// one of the claims above.
-var retractionWords = []string{"FALSE", "HARMFUL", "false", "wrong", "retract", "corrected", "KEPT", "not merely stale"}
+// retractionMarkers are what a paragraph must say for it to count as RETRACTING, rather than
+// repeating, one of the claims above.
+//
+// This list used to read {FALSE, HARMFUL, false, wrong, retract, corrected, KEPT, not merely stale}
+// and it did not work. An adversarial reader re-asserted the "stream-map leak" claim verbatim, as a
+// standalone sentence, and the guard stayed green — because the same paragraph happened to contain
+// the word "wrong" in an unrelated clause ("getting the tag order wrong"). Instrumented, the two
+// stream-map paragraphs passed on "wrong" alone and "corrected" alone, and "not merely stale" was
+// matched by no paragraph at all: a dead entry padding a list that was already too loose.
+//
+// Ordinary English is therefore not admissible. A marker has to be a word nobody writes by accident,
+// which TestRetractionMarkersCannotBeOrdinaryProse enforces mechanically: ALL CAPS, five characters
+// or more. That rules out "wrong", "corrected", "false" and "KEPT" by construction, so the list
+// cannot quietly loosen again.
+var retractionMarkers = []string{"FALSE", "HARMFUL", "RETRACTED", "RETRACTION"}
 
-// TestPatchesMDDoesNotRepeatItsRetractedClaims fails if any retracted claim appears in a paragraph
-// that does not say it is wrong.
+// retractionWindow is how close a marker has to be to the claim it retracts. Presence anywhere in
+// the paragraph was the second half of the hole: a long paragraph can retract one thing and assert
+// another, and the guard could not tell which sentence the marker belonged to.
+const retractionWindow = 400
+
+// TestRetractionMarkersCannotBeOrdinaryProse is the guard ON the guard below. Without it,
+// TestPatchesMDDoesNotRepeatItsRetractedClaims can be defeated by widening its own word list, which
+// is exactly how it was defeated: the entry that let the re-assertion through was "wrong".
+func TestRetractionMarkersCannotBeOrdinaryProse(t *testing.T) {
+	if len(retractionMarkers) == 0 {
+		t.Fatal("retractionMarkers is empty, so every retracted claim below would count as retracted " +
+			"by a paragraph that says nothing at all")
+	}
+	for _, w := range retractionMarkers {
+		if w != strings.ToUpper(w) || len(w) < 5 {
+			t.Errorf("retraction marker %q is ordinary prose: a marker must be ALL CAPS and at least 5 "+
+				"characters, so that it cannot be satisfied by a word a writer uses for something else. "+
+				"%q was added to this list once and it let a retracted claim be re-asserted verbatim.", w, "wrong")
+		}
+	}
+}
+
+// markerNear reports whether one of the retraction markers sits within retractionWindow bytes of the
+// claim occurrence at `at`.
+func markerNear(para string, at, n int) bool {
+	lo, hi := at-retractionWindow, at+n+retractionWindow
+	if lo < 0 {
+		lo = 0
+	}
+	if hi > len(para) {
+		hi = len(para)
+	}
+	win := para[lo:hi]
+	for _, w := range retractionMarkers {
+		if strings.Contains(win, w) {
+			return true
+		}
+	}
+	return false
+}
+
+// TestPatchesMDDoesNotRepeatItsRetractedClaims fails if any retracted claim appears anywhere that
+// does not retract it, ADJACENTLY. Three conditions, and all three were needed:
+//
+//	(1) the claim must still appear at all — the published tags carrying it cannot be edited, so the
+//	    correction has to live in the tree that supersedes them;
+//	(2) EVERY occurrence must have a retraction marker within retractionWindow bytes of it, in the
+//	    same paragraph;
+//	(3) at least one occurrence must sit beside the literal "RETRACTED", so that there is one place a
+//	    reader can find the correction rather than only places that are not the assertion.
 func TestPatchesMDDoesNotRepeatItsRetractedClaims(t *testing.T) {
 	doc := patchesDoc(t)
 	paras := regexp.MustCompile(`\n\s*\n`).Split(doc, -1)
 	for _, r := range retracted {
-		found := 0
+		found, explicit := 0, false
 		for _, para := range paras {
 			if !strings.Contains(para, r.claim) {
 				continue
 			}
-			found++
-			retracts := false
-			for _, w := range retractionWords {
-				if strings.Contains(para, w) {
-					retracts = true
+			if strings.Contains(para, "RETRACTED") {
+				explicit = true
+			}
+			for off := 0; ; {
+				i := strings.Index(para[off:], r.claim)
+				if i < 0 {
 					break
 				}
-			}
-			if !retracts {
-				t.Errorf("PATCHES.md states the retracted claim %q in a paragraph that does not retract it:\n"+
-					"  ...%s...\n"+
-					"Why it is retracted: %s", r.claim, squash(para), r.why)
+				at := off + i
+				found++
+				if !markerNear(para, at, len(r.claim)) {
+					t.Errorf("PATCHES.md states the retracted claim %q with no retraction marker %v within "+
+						"%d bytes of it:\n  ...%s...\nWhy it is retracted: %s",
+						r.claim, retractionMarkers, retractionWindow, squash(para), r.why)
+				}
+				off = at + len(r.claim)
 			}
 		}
 		if found == 0 {
 			t.Errorf("PATCHES.md no longer mentions %q anywhere, but the retraction of it must stay: %s "+
 				"The tags that published it cannot be edited, so the correction has to live in the tree that "+
 				"supersedes them.", r.claim, r.why)
+		}
+		if found > 0 && !explicit {
+			t.Errorf("PATCHES.md mentions the retracted claim %q, but no paragraph containing it also "+
+				"carries the literal word RETRACTED. A reader who greps for the claim must land on the "+
+				"correction, not on a paragraph that merely happens to contain a strong-sounding word.",
+				r.claim)
 		}
 	}
 }
@@ -610,18 +711,32 @@ func sightglassAuthored(t *testing.T) map[string]string {
 // :2864, and http2/chrome_concurrency.go still cited ":766 and :2737" and called them "exactly two"
 // when patch 3 touches three lines — so this fork's own prose cites functions and markers instead.
 func TestPatchesMDCitesNoLineNumbersIntoThisTree(t *testing.T) {
-	// Quoted test output is not a citation: it is what the guard printed, and reproducing it exactly is
-	// the point of an ablation record.
-	allowed := map[string]bool{
-		"cancel_stream_reset_test.go:159": true,
-	}
+	// Quoted test output is not a citation: it is what the guard printed, and reproducing it exactly
+	// is the point of an ablation record. That used to be a hand-maintained allow-list of one entry,
+	// which is a list that rots — and did: the entry named line 159 of a file whose guard now prints
+	// 161. The rule is structural instead. A fenced block in PATCHES.md is machine output, so line
+	// numbers inside one are quoted, not cited; everywhere else in the PROSE they are forbidden,
+	// which is where every stale citation actually lived. The exemption is not a blank cheque: a
+	// quoted line number must still be inside the file it names, so output copied from a tree that
+	// has since moved by hundreds of lines is caught.
 	re := regexp.MustCompile(`([A-Za-z0-9_./]+\.go):(\d+)`)
 	for file, body := range sightglassAuthored(t) {
-		var bad []string
-		for _, m := range re.FindAllStringSubmatch(body, -1) {
-			if allowed[m[0]] {
-				continue
+		scan := body
+		if file == patchesFile {
+			scan = stripFencedBlocks(body)
+			for _, m := range re.FindAllStringSubmatch(body, -1) {
+				if !fileExistsInTree(m[1]) {
+					continue
+				}
+				n, _ := strconv.Atoi(m[2])
+				if lines := fileLineCount(m[1]); lines > 0 && n > lines {
+					t.Errorf("PATCHES.md quotes %s, and %s has only %d lines. Output quoted from a tree "+
+						"that has since moved is a record of a run nobody can reproduce.", m[0], m[1], lines)
+				}
 			}
+		}
+		var bad []string
+		for _, m := range re.FindAllStringSubmatch(scan, -1) {
 			// Only citations into THIS tree drift with our own edits; spdy_session.cc:837 and friends are
 			// pinned by the Chromium version named beside them.
 			if !fileExistsInTree(m[1]) {
@@ -742,5 +857,272 @@ func TestPatchesMDCarriesARegressionDiff(t *testing.T) {
 			t.Errorf("the regression-diff block in PATCHES.md has no %q line. A diff without both sides and an "+
 				"explicit new-failure count is a green-suite claim wearing a diff's clothes.", want)
 		}
+	}
+}
+
+// stripFencedBlocks removes ``` fenced blocks from a Markdown body. What is left is the prose.
+func stripFencedBlocks(body string) string {
+	var out strings.Builder
+	in := false
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "```") {
+			in = !in
+			continue
+		}
+		if !in {
+			out.WriteString(line)
+			out.WriteByte('\n')
+		}
+	}
+	return out.String()
+}
+
+// fileLineCount returns the number of lines in a tree-relative path, or 0 if it cannot be read as
+// one (a bare basename cited from elsewhere, for instance).
+func fileLineCount(rel string) int {
+	b, err := os.ReadFile(rel)
+	if err != nil {
+		return 0
+	}
+	return strings.Count(string(b), "\n") + 1
+}
+
+// ---------------------------------------------------------------------------------------------
+// PER-FILE PATCH ATTRIBUTION
+//
+// TestPatchesMDPatchNumbersMatchTheSourceMarkers above compares the patch numbers as SETS — the
+// union of every marker in the tree against the union of the headings. An adversarial reader broke
+// it in two moves that a set comparison cannot see:
+//
+//	(a) swapping two markers between two files (http2/client_conn_pool.go's "PATCH 5" became
+//	    "PATCH 9" and http2/transport.go's "PATCH 9" became "PATCH 5"). Both markers then named the
+//	    wrong patch — which is the EXACT published defect this file was written for, the patch-5
+//	    comment in client_conn_pool.go that read "PATCH 3" — and every guard stayed green, because
+//	    the union {5,9} was unchanged;
+//	(b) re-attributing a file in the manifest, "M request.go patch 8b" -> "patch 7". Green, because
+//	    docManifest parsed only the A/M letter and the path and threw the rest away.
+//
+// Those two are one hole: the doc's patch<->file MAPPING was unchecked. It is load-bearing, because
+// Maintenance step 4 tells the next maintainer to resolve upstream merge conflicts "against the
+// markers", and a marker that names the wrong patch sends them to the wrong section of this file.
+//
+// This check closes it in both directions: every marker in a .go file must be listed beside that
+// file in the manifest, and every patch number the manifest lists beside a .go file must appear as a
+// marker in it.
+// ---------------------------------------------------------------------------------------------
+
+var manifestPatchRE = regexp.MustCompile(`\bpatch(?:es)?\s+((?:\d+b?)(?:\s*,\s*\d+b?)*)`)
+
+// docFilePatches maps each manifest path to the patch numbers listed beside it. Paths with no patch
+// number (PATCHES.md itself, go.mod, go.sum) are absent rather than empty.
+func docFilePatches(t *testing.T, doc string) map[string]map[string]bool {
+	t.Helper()
+	out := map[string]map[string]bool{}
+	for _, line := range strings.Split(section(t, doc, "## Files touched"), "\n") {
+		f := strings.Fields(line)
+		if len(f) < 2 || (f[0] != "A" && f[0] != "M") {
+			continue
+		}
+		path := f[1]
+		rest := line[strings.Index(line, path)+len(path):]
+		m := manifestPatchRE.FindStringSubmatch(rest)
+		if m == nil {
+			continue
+		}
+		nums := map[string]bool{}
+		for _, n := range strings.Split(m[1], ",") {
+			nums[strings.TrimSpace(n)] = true
+		}
+		out[path] = nums
+	}
+	if len(out) == 0 {
+		t.Fatal("no manifest line in PATCHES.md attributes a file to a patch number. The manifest is how " +
+			"the next maintainer finds which sections apply to a file they are merging; without the " +
+			"attribution this check proves nothing.")
+	}
+	return out
+}
+
+// markerNumbersByFile is markerNumbers, per file rather than unioned.
+func markerNumbersByFile(t *testing.T) map[string]map[string]bool {
+	t.Helper()
+	out := map[string]map[string]bool{}
+	err := filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			if info.Name() == ".git" || info.Name() == "testdata" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || filepath.Base(path) == "patches_doc_test.go" {
+			return nil
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for _, m := range markerRE.FindAllStringSubmatch(string(b), -1) {
+			for _, n := range strings.Split(m[1], "+") {
+				if out[path] == nil {
+					out[path] = map[string]bool{}
+				}
+				out[path][n] = true
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking the tree for patch markers: %v", err)
+	}
+	return out
+}
+
+// TestPatchesMDAttributesEveryMarkerToTheRightFile pins the doc's patch<->file mapping site by site.
+func TestPatchesMDAttributesEveryMarkerToTheRightFile(t *testing.T) {
+	doc := patchesDoc(t)
+	docPatches := docFilePatches(t, doc)
+	markers := markerNumbersByFile(t)
+
+	for path, got := range markers {
+		want, listed := docPatches[path]
+		if !listed {
+			t.Errorf("%s carries [SIGHTGLASS PATCH %v] markers, but PATCHES.md's \"Files touched\" manifest "+
+				"attributes it to no patch at all. A marked file that the manifest does not attribute is a "+
+				"patch the next upstream merge resolves against nothing.", path, sortedKeys(got))
+			continue
+		}
+		if missing, extra := diffSets(want, got); len(missing) > 0 || len(extra) > 0 {
+			t.Errorf("%s: PATCHES.md attributes it to patches %v, its markers say %v.\n"+
+				"  listed in the manifest but not marked in the file: %v\n"+
+				"  marked in the file but not listed in the manifest: %v\n"+
+				"Maintenance step 4 tells the next maintainer to resolve conflicts \"against the markers\", so a "+
+				"marker that names the wrong patch sends them to the wrong section of this file — which is "+
+				"exactly how http2/client_conn_pool.go's patch-5 comment came to read \"PATCH 3\".",
+				path, sortedKeys(want), sortedKeys(got), missing, extra)
+		}
+	}
+	for path, want := range docPatches {
+		if !strings.HasSuffix(path, ".go") {
+			continue
+		}
+		if _, ok := markers[path]; ok {
+			continue
+		}
+		if _, err := os.Stat(path); err != nil {
+			continue // the file manifest test owns "this path is not in the tree"
+		}
+		t.Errorf("PATCHES.md attributes %s to patches %v, but that file carries no [SIGHTGLASS PATCH n] "+
+			"marker. `grep -rn 'SIGHTGLASS PATCH'` is what Maintenance step 4 sends the next maintainer to; "+
+			"a patch site it does not list is a patch that merge will silently drop.", path, sortedKeys(want))
+	}
+}
+
+// TestPatchesMDGuardTableNamesFilesThatExist pins the other half of "a guard cannot be cited into
+// existence". TestPatchesMDNamesGuardsThatExist checks TEST NAMES and exempts anything spelled
+// `parity.X`; it never checked the fork-side FILE names in the same table. An adversarial reader
+// added a row naming a fork test file and a parity test of which NEITHER exists, and all ten guards
+// stayed green. This check covers the file half; the Sightglass half — that every `parity.Test*`
+// this file names resolves to a real test in go/ — is checked there, by
+// parity.TestForkPATCHESNamesSightglassGuardsThatExist, because the fork has no view of Sightglass.
+func TestPatchesMDGuardTableNamesFilesThatExist(t *testing.T) {
+	doc := patchesDoc(t)
+	sec := section(t, doc, "## Where each patch is guarded")
+	re := regexp.MustCompile("`([A-Za-z0-9_./-]+\\.go)`")
+	seen := map[string]bool{}
+	checked := 0
+	for _, m := range re.FindAllStringSubmatch(sec, -1) {
+		if seen[m[1]] {
+			continue
+		}
+		seen[m[1]] = true
+		checked++
+		if fi, err := os.Stat(m[1]); err != nil || fi.IsDir() {
+			t.Errorf("PATCHES.md's guard table names %q as the fork-local guard for a patch, and no such "+
+				"file exists in this tree. A guard that can be cited into existence is not a guard; it is the "+
+				"same claim as an ablation that was never run.", m[1])
+		}
+	}
+	if checked == 0 {
+		t.Error("the guard table in PATCHES.md names no fork-local guard FILE at all, so this check read " +
+			"nothing and would pass on a table full of invented ones")
+	}
+}
+
+var diffTagRE = regexp.MustCompile(`(?m)^(before|after):\s+(v[0-9][A-Za-z0-9.\-]*)`)
+
+// gitHere reports whether this copy of the module is a git checkout we can ask about tags. A
+// consumer that got the module from the proxy has no .git, and the tag check below is the only one
+// that needs one.
+func gitHere() bool {
+	if _, err := exec.LookPath("git"); err != nil {
+		return false
+	}
+	out, err := exec.Command("git", "rev-parse", "--is-inside-work-tree").CombinedOutput()
+	return err == nil && strings.TrimSpace(string(out)) == "true"
+}
+
+// TestPatchesMDRegressionDiffIsForTHISTree makes true a sentence the regression-diff block already
+// claimed about itself: "patches_doc_test.go checks the marker is present and that the tag named
+// below is the tag this tree is at." It did not. The block shipped inside v0.6.9-sightglass.14
+// carrying numbers measured at .12 and .13 and a line reading "after: v0.6.9-sightglass.12, this
+// tree", and nothing objected. A stale regression diff is worse than none: it reads as a
+// measurement of what ships.
+func TestPatchesMDRegressionDiffIsForTHISTree(t *testing.T) {
+	doc := patchesDoc(t)
+	i, j := strings.Index(doc, "REGRESSION-DIFF-BEGIN"), strings.Index(doc, "REGRESSION-DIFF-END")
+	if i < 0 || j < 0 {
+		t.Fatal("PATCHES.md has lost its machine-findable regression-diff block")
+	}
+	blk := doc[i:j]
+	tags := map[string]string{}
+	for _, m := range diffTagRE.FindAllStringSubmatch(blk, -1) {
+		if _, ok := tags[m[1]]; !ok {
+			tags[m[1]] = m[2]
+		}
+	}
+	for _, side := range []string{"before", "after"} {
+		if tags[side] == "" {
+			t.Errorf("the regression-diff block's %q line names no vX.Y.Z tag. A diff whose sides are not "+
+				"identified by tag cannot be re-run, and cannot be checked against the tree it claims to "+
+				"describe.", side)
+		}
+	}
+	if t.Failed() {
+		return
+	}
+	if !gitHere() {
+		t.Log("this copy of the module is not a git checkout, so the tags themselves are not resolved here; " +
+			"the before/after lines were still required to name them")
+		return
+	}
+	head, err := exec.Command("git", "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("git rev-parse HEAD: %v", err)
+	}
+	headSHA := strings.TrimSpace(string(head))
+
+	if err := exec.Command("git", "rev-parse", "--verify", tags["before"]+"^{commit}").Run(); err != nil {
+		t.Errorf("the regression-diff block says it measured `before` at %s, and no such tag exists in this "+
+			"repository. The before side has to be a published tag someone else can check out and re-run.",
+			tags["before"])
+	} else if err := exec.Command("git", "merge-base", "--is-ancestor", tags["before"], "HEAD").Run(); err != nil {
+		t.Errorf("the regression-diff block measures `before` at %s, which is not an ancestor of HEAD. "+
+			"A before side off this line of history is not a diff of this tree.", tags["before"])
+	}
+
+	out, err := exec.Command("git", "rev-parse", "--verify", tags["after"]+"^{commit}").Output()
+	switch {
+	case err != nil:
+		// The tag does not exist yet: this is the tree that is about to be tagged as it, which is the
+		// only state in which the doc can name its own tag before it is cut.
+		t.Logf("the regression-diff block names `after: %s`, a tag that does not exist yet — this tree is "+
+			"the one waiting to be tagged as it", tags["after"])
+	case strings.TrimSpace(string(out)) != headSHA:
+		t.Errorf("the regression-diff block says `after: %s`, but that tag is %s and this tree is at %s. "+
+			"The numbers in the block were measured somewhere else, and nothing said so — which is how .14 "+
+			"shipped a diff measured at .12.", tags["after"], strings.TrimSpace(string(out))[:12], headSHA[:12])
 	}
 }

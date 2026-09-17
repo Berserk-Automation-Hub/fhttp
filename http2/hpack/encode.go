@@ -157,8 +157,9 @@ func (e *Encoder) SetMaxDynamicTableSizeLimit(v uint32) {
 // later request.
 //
 // Sensitive is deliberately NOT the mechanism for this. Sensitive emits "Never Indexed" (0x1x),
-// which carries an explicit do-not-proxy instruction and which Chrome uses zero times in 2513
-// observed fields; using it to mean "do not index" would fix one octet and break another.
+// which carries an explicit do-not-proxy instruction and which Chrome uses zero times in the 2729
+// request header fields re-derived from the captures; using it to mean "do not index" would fix one
+// octet and break another. indexing_policy_test.go pins that boundary.
 //
 // policy == nil restores upstream behaviour exactly.
 func (e *Encoder) SetIndexingPolicy(policy func(HeaderField) bool) {

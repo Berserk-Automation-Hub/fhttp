@@ -312,6 +312,8 @@ func ExportCloseTransportConnsAbruptly(tr *Transport) {
 	tr.idleMu.Unlock()
 }
 
+// [SIGHTGLASS PATCH 4b] lets TestTransportProxyHTTPSConnectLeak drive the CONNECT bound
+// directly instead of waiting a real minute. Upstream net/http exports the same hook.
 func SetTestHookProxyConnectTimeout(t *testing.T, f func(context.Context, time.Duration) (context.Context, context.CancelFunc)) {
 	orig := testHookProxyConnectTimeout
 	t.Cleanup(func() {

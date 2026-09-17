@@ -26,31 +26,36 @@ compile. HR-2 enforced by the compiler rather than by convention.
 
 ## Upstream's tests are KEPT, not stripped
 
-This tree carries **81 `*_test.go` files: 73 from upstream v0.6.9, of which 68 carry nothing but the
-module-path rewrite and 5 are edited, plus 8 added by this fork.** `export_test.go` and `testdata/`
+This tree carries **82 `*_test.go` files: 73 from upstream v0.6.9, of which 68 carry nothing but the
+module-path rewrite and 5 are edited, plus 9 added by this fork.** `export_test.go` and `testdata/`
 are kept too. That is load-bearing, not tidiness: restoring upstream's suite is what found patch 4b
 (a leak patch 4 introduced, which hung `TestTransportProxyHTTPSConnectLeak` for the full test
 timeout) and what forced the two toolchain-drift fixes below. The five edits are listed in the
 manifest, each against the patch that made it necessary.
 
-**A correction, recorded because the tags that carried it are published.** Revisions of this file up
-to and including `v0.6.9-sightglass.11` opened with three statements that were all false: that the
-base was v0.6.8 (it is v0.6.9 — v0.6.8 is commit `ecfe905`, one release earlier); that the tree was
-"vendored here and wired in with `replace github.com/bogdanfinn/fhttp => ./third_party/fhttp`" (there
-is no such `replace` and no such directory, and the rule forbids both); and that it had been
-"stripped of `*_test.go`, `export_test.go` and `testdata/` … 0 test files" (it has 81). The
-`## Maintenance` section then repeated the last one as an INSTRUCTION — "re-copy upstream, strip
-tests" — which is a fourth error and not a restatement of the third: one is a false description, the
-other tells the next maintainer to delete the suite that catches the defects. All four are corrected
-here and pinned by `patches_doc_test.go`.
+**RETRACTED CLAIMS.** Published tags cannot be edited, so the corrections live here, each beside the
+sentence it corrects. `patches_doc_test.go` pins every one of them: the claim must still appear (a
+retraction nobody can grep for is not a retraction), and every appearance must carry a RETRACTED /
+FALSE / HARMFUL marker within 400 bytes of it.
+
+* **RETRACTED, FALSE** — "the base is v0.6.8". It is v0.6.9, commit `a8b1417`; v0.6.8 is `ecfe905`,
+  one release earlier. Verified against `git ls-remote --tags https://github.com/bogdanfinn/fhttp`.
+* **RETRACTED, FALSE** — "vendored here and wired in with `replace github.com/bogdanfinn/fhttp` =>
+  `./third_party/fhttp`". There is no such directive and no such directory, and the rule forbids
+  both.
+* **RETRACTED, FALSE** — "stripped of `*_test.go`, `export_test.go` and `testdata/` … 0 test files".
+  The tree carries 81, and the retained upstream suite is what found patch 4b.
+* **RETRACTED, HARMFUL** — the `## Maintenance` instruction to "re-copy upstream", and its
+  instruction to "strip tests". The line above was a false description; this was an instruction to
+  delete the suite that catches the defects. See `## Maintenance` at the end of this file.
 
 ## Files touched
 
 Mechanically derived from `git diff --name-status a8b1417 HEAD`, and re-derived by
-`patches_doc_test.go` on every run. 97 files in total: 11 added, 86 modified, of which 70 are
+`patches_doc_test.go` on every run. 98 files in total: 12 added, 86 modified, of which 70 are
 modified **only** by the module-path rewrite.
 
-### Added (11)
+### Added (12)
 
 ```
 A  PATCHES.md                              this file
@@ -60,14 +65,15 @@ A  header_http1omit_test.go                patch 8   guard
 A  http2/await_request_cancel_test.go      patch 12  guard
 A  http2/cancel_stream_reset_test.go       patch 11  guard
 A  http2/goaway_flush_test.go              patch 9   guard
+A  http2/hpack/indexing_policy_test.go     patch 6   guard
 A  http2/hpack/static_name_index_test.go   patch 10  guard
 A  no_auto_headers_test.go                 patch 8b  guard
 A  transport_deflate_leak_test.go          patch 7   guard
 A  patches_doc_test.go                     —         guard on THIS FILE
 ```
 
-Two product files and eight guards. Seven are new with the patch they guard; the eighth,
-`patches_doc_test.go`, guards this document — it re-derives the base commit, the manifest above,
+Two product files and ten guards. Seven are new with the patch they guard; `patches_doc_test.go`
+guards this document — it re-derives the base commit, the manifest above,
 the patch numbers, the guard names and the test-file count from the tree, and fails naming the
 sentence that stopped being true. None of them existed upstream.
 
@@ -108,8 +114,19 @@ patches have no fork-local test of their own and are guarded ONLY in the consume
 here rather than glossed, because a reader who assumes otherwise will delete the wrong thing on the
 next upstream merge.
 
-`patches_doc_test.go` requires every test this file names to exist either in this tree or in this
-table, so a guard cannot be cited into existence.
+**How much of this table is machine-checked, exactly.** The sentence that used to stand here —
+"a guard cannot be cited into existence" — was FALSE, and an adversarial reader proved it by adding
+the row `| 3 | http2/chrome_concurrency_test.go | parity.TestParityThisGuardWasNeverWritten |`, in
+which neither the file nor the test exists, and watching all ten guards stay green. Two holes: the
+fork-side FILE names were never checked at all, and any name spelled `parity.X` was whitelisted
+unconditionally because the fork has no view of Sightglass. Both are closed, in the two places that
+can see the two halves:
+
+| what | checked by | where |
+|---|---|---|
+| every unprefixed `TestX` this file names exists in THIS tree | `TestPatchesMDNamesGuardsThatExist` | here |
+| every backticked `…_test.go` path named in THIS table exists on disk | `TestPatchesMDGuardTableNamesFilesThatExist` | here |
+| every `parity.TestX` / `sightglass.TestX` this file names resolves to a real `func Test…` in `go/` | `parity.TestForkPATCHESNamesSightglassGuardsThatExist` | Sightglass, reading this file out of the module cache |
 
 | patch | guard in THIS fork | guard in Sightglass (shipped path) |
 |---|---|---|
@@ -119,7 +136,7 @@ table, so a guard cannot be cited into existence.
 | 4  | — none | `parity.TestParityNoAbandonedH1Dials`, `sightglass.TestStressNoLeaks` |
 | 4b | `TestTransportProxyHTTPSConnectLeak` (upstream's own, restored — it is what FOUND this patch) | — |
 | 5  | — none | `parity.TestParityH2DialHonoursRequestContext` |
-| 6  | `http2/hpack/encode_test.go` `TestEncoderSearchTable` covers the static-NAME half; the **indexing-policy** half (`Encoder.SetIndexingPolicy`, `Transport.HPACKIndexingPolicy`) has **no fork test** | `parity.TestParityHPACKEncoderMatchesChrome153`, `parity.TestParityHPACKPseudoHeaderRepresentationMatchesChrome153`, `parity.TestHPACKIndexingPolicyIsProfileDrivenNotHardcoded` |
+| 6  | `http2/hpack/encode_test.go` `TestEncoderSearchTable` for the static-NAME half; `http2/hpack/indexing_policy_test.go` for the indexing-policy half (`Encoder.SetIndexingPolicy`) — the representation octet, the dynamic-table consequence on the NEXT request, the Sensitive boundary and the nil-is-upstream control | `parity.TestParityHPACKEncoderMatchesChrome153`, `parity.TestParityHPACKPseudoHeaderRepresentationMatchesChrome153`, `parity.TestHPACKIndexingPolicyIsProfileDrivenNotHardcoded` |
 | 7  | `transport_deflate_leak_test.go` | — (a parked goroutine and an fd have no wire signature) |
 | 8  | `header_http1omit_test.go` | `parity.TestParityHTTP1Identity` (the magic key must not reach the HTTP/1.1 wire) |
 | 8b | `no_auto_headers_test.go` | `parity.TestParityCallerStatedBlockIsExactOnH2` |
@@ -133,7 +150,9 @@ table, so a guard cannot be cited into existence.
 **The five with no fork test — 1, 2, 3, 4 and 5 — are the original batch**, written before this fork
 kept upstream's suite, and each is a wire or dial property that a loopback origin in the consumer
 observes directly. They are guarded, and ablated, in Sightglass; they are not guarded here. Patch 6's
-indexing half is a genuine gap on both counts and is filed as such.
+indexing half WAS the sixth such gap, and it is now closed:
+`http2/hpack/indexing_policy_test.go` is its fork-local guard, added in `v0.6.9-sightglass.15`
+because code this fork ADDS is tested in this fork and not only through a consumer.
 
 Run prefixes quoted in the `Proof (HR-7)` blocks below — `parity.TestParityHTTP2`,
 `parity.TestParityHTTP2MixedUrgency`, `parity.TestParityHTTP2Concurrency` and
@@ -559,11 +578,37 @@ upstream now specifies.
 * `pprof/pprof.go` did not know Go 1.27's `goroutineleak` profile, so `TestDescriptions` failed. Added
   to both `profileSupportsDelta` and `profileDescriptions`, matching upstream.
 
+### Ablation (the guard is falsifiable, not self-fulfilling)
+
+Restoring the conditional bound — `connectCtx := ctx; if ctx.Done() == nil { connectCtx, cancel =
+testHookProxyConnectTimeout(ctx, 1*time.Minute) }`, i.e. the shape this tree carried before the
+patch — and running upstream's own test with a 90 s bound:
+
+```
+$ GOTOOLCHAIN=auto go test . -run TestTransportProxyHTTPSConnectLeak -count=1 -timeout 90s
+panic: test timed out after 1m30s
+	running tests:
+		TestTransportProxyHTTPSConnectLeak (1m30s)
+...
+github.com/Berserk-Automation-Hub/fhttp.ReadResponse(0x482742e181e0, 0x482742f18200)
+	/tmp/fhttp-fork/response.go:162 +0x80
+github.com/Berserk-Automation-Hub/fhttp.(*Transport).dialConn.func4()
+	/tmp/fhttp-fork/transport.go:1733 +0x1dc
+created by github.com/Berserk-Automation-Hub/fhttp.(*Transport).dialConn in goroutine 8
+FAIL	github.com/Berserk-Automation-Hub/fhttp	90.389s
+```
+
+That is the defect itself, not a mere difference: the dialConn goroutine is parked in `ReadResponse`
+on a proxy that accepted the TCP connect and never answered, holding the socket, with no bound on it
+at all. Patch 4 made the condition `ctx.Done() == nil` false in exactly the case the safety net
+existed for. Restored, the test passes in well under a second.
+
 ### Verification
 
 Baseline matters here: **pristine upstream v0.6.9 already fails 34 tests** under `go test -short`, so
 "green" is not an available bar. The bar is a regression diff — run pristine and fork identically and
-count only what fails in the fork and not in pristine:
+count only what fails in the fork and not in pristine. The tree-wide measurement is under "Regression
+diff" at the foot of this file; this entry's own, measured the day it landed:
 
 ```
 fork: 34 failing   pristine: 34 failing
@@ -648,19 +693,24 @@ name+value hit, but emitted verbatim in every literal-with-indexed-name represen
 RFC 7541 §6.2.1 permits matching *any* entry with that name, so this was always an implementation
 choice — upstream's own test comment says exactly that ("This is allowed to match any `:method`
 entry. The current implementation uses the last entry added"). Real Chrome 153 uses the first, on
-114 `:path` and 8 `:method` observations across two captures with zero exceptions. Only the STATIC
-table is rebuilt; the dynamic table keeps most-recent-wins, because its indices shift on eviction.
+**130 `:path` and 8 `:method`** literal-with-indexed-name observations across four captures with
+zero exceptions (see "Ground truth"). Only the STATIC table is rebuilt; the dynamic table keeps
+most-recent-wins, because its indices shift on eviction.
 
 **2. The encoder indexed everything that fit.** Chrome never incrementally-indexes `:path` — the
 value changes every request, so indexing it evicts useful entries for nothing — and never indexes a
-literal `:method`, while it *does* index `:authority`, which is stable for the connection.
+literal `:method`, while it *does* index `:authority`, which is stable for the connection. Measured:
+all **130** `:path` and all **8** `:method` literals are "without Indexing", and `:authority` is
+emitted "with Incremental Indexing" **53** times.
 `Encoder.SetIndexingPolicy` adds a per-field hook; `nil` is upstream behaviour exactly.
 `Transport.HPACKIndexingPolicy` carries it, installed once per connection because HPACK is stateful
 and a mid-connection change would desynchronise our table from the peer's view of it.
 
 `Sensitive` is deliberately NOT the mechanism: it emits "Never Indexed" (`0x1x`), which carries an
-explicit do-not-proxy instruction and which Chrome uses **zero** times in 2513 observed fields. It
-would fix one octet and break another.
+explicit do-not-proxy instruction and which Chrome uses **zero** times in the **2729** request
+header fields re-derived from the captures. It would fix one octet and break another. The boundary
+is guarded: `TestIndexingPolicyDoesNotOverrideSensitive` fails if a policy that returns true can
+turn a `Sensitive` field into an indexed one.
 
 ### Result
 
@@ -668,6 +718,55 @@ would fix one octet and break another.
 :path "/x"   upstream default            -> 0x44
              with Chrome's policy        -> 0x04     (what Chrome emits)
 ```
+
+### Ablation (both halves, separately)
+
+**The static-NAME half.** Disabling the first-match rebuild in `newStaticTable` (`if false &&
+!lastMatch`), i.e. upstream's table:
+
+```
+$ GOTOOLCHAIN=auto go test ./http2/hpack/ -count=1
+--- FAIL: TestEncoderSearchTable (0.00s)
+    encode_test.go:130: d.search(header field ":method" = "GET" (sensitive)) = 3, false; want 2, false
+--- FAIL: TestStaticNameIndexPolicyIsOnTheWire/first-match_(Chrome) (0.00s)
+    static_name_index_test.go:46: :path name index = 5, want 4 (leading byte 0x15)
+--- FAIL: TestStaticTablesAgreeExceptOnByName (0.00s)
+    static_name_index_test.go:120: byName is identical in both tables — the last-match table is not being built
+```
+
+**The indexing-policy half.** Disabling the hook in `shouldIndex` (`if false && e.indexingPolicy !=
+nil`), which is exactly upstream's "index everything that fits":
+
+```
+$ GOTOOLCHAIN=auto go test ./http2/hpack/ -run 'TestIndexingPolicy|TestNilIndexingPolicy' -count=1
+--- FAIL: TestIndexingPolicyChangesTheRepresentationOctet (0.00s)
+    indexing_policy_test.go:69: with Chrome's policy the first octet for :path is 0x44, want 0x04
+        (literal WITHOUT indexing, name index 4). SetIndexingPolicy is not reaching the
+        representation, so the encoder is emitting the indexed form no browser emits — the exact
+        octet patch 6 exists to fix.
+    indexing_policy_test.go:74: the policy changed nothing: both encodings are
+        44 93 60 6b 77 1d 16 95 63 54 b5 47 59 09 1a 4c 45 8b 52 6c f5.
+--- FAIL: TestIndexingPolicyDecidesWhatComesBackAsADynamicIndex/Chrome's:_only_:authority_comes_back_indexed
+    indexing_policy_test.go:117: second request, :path: encoded as bf (indexed=true), want indexed=false.
+```
+
+Both messages name the octet and the dynamic-table consequence, not merely a mismatch, and both go
+green the moment the patch is restored.
+
+### Coverage, before and after
+
+`Encoder.SetIndexingPolicy` is a function this fork ADDED and no fork test had ever executed. Measured
+with `go test ./http2/hpack/ -coverprofile`:
+
+```
+                             before (.14)   after (.15)
+SetIndexingPolicy               0.0%          100.0%
+shouldIndex                    80.0%          100.0%
+http2/hpack package            89.2%           89.6%
+```
+
+0.0% is the number that matters: a consumer's parity guard exercised the seam end to end, and the
+fork's own suite never touched it at all.
 
 ### Verification
 
@@ -747,8 +846,30 @@ without panicking; and after three requests that are abandoned without reading, 
 parked in the decode path** — with the origin still holding its sockets, so only the fix can free
 them.
 
-Ablated by restoring the eager `identifyDeflate`: all three go red with the original symptom,
-`the request never completed (… Client.Timeout exceeded while awaiting headers)`.
+### Ablation
+
+Restoring the eager `identifyDeflate` — the version that drained the whole body with `io.Copy` to
+replay the two octets it sniffed — reproduces the deadlock on every shape the guard covers:
+
+```
+$ GOTOOLCHAIN=auto go test . -run TestDeflate -count=1 -timeout 120s
+--- FAIL: TestDeflateResponseDoesNotParkReadLoop/zlib-wrapped_(RFC_1950) (10.00s)
+    transport_deflate_leak_test.go:143: the request never completed (Get "http://127.0.0.1:54737/x":
+    context deadline exceeded (Client.Timeout exceeded while awaiting headers)). Before the fix this
+    reported "Client.Timeout exceeded while awaiting headers", because readLoop was parked inside
+    its own body drain.
+--- FAIL: TestDeflateResponseDoesNotParkReadLoop/raw_DEFLATE_(RFC_1951) (10.01s)
+--- FAIL: TestDeflateShortBodyDoesNotParkReadLoop/one_octet (10.00s)
+    transport_deflate_leak_test.go:182: ...; a body too short to sniff must not park readLoop either
+--- FAIL: TestDeflateShortBodyDoesNotParkReadLoop/two_octets,_not_a_zlib_header (10.00s)
+--- FAIL: TestDeflateBodyClosedWithoutReadingDoesNotPanic (10.01s)
+--- FAIL: TestDeflateLeavesNoParkedGoroutine (5.00s)
+FAIL	github.com/Berserk-Automation-Hub/fhttp	55.526s
+```
+
+Six failures, all of them the deadlock rather than a difference: the caller sees the slow-origin
+symptom `Client.Timeout exceeded while awaiting headers` because the readLoop goroutine is parked on
+a channel only readLoop can close.
 
 ### Verification
 
@@ -774,11 +895,16 @@ a caller sets them unconditionally and only the HTTP/1.1 serializer writes them.
 HTTP/1.1 is written by the HTTP/1.1 serializer, and the caller cannot know which protocol will be
 negotiated: ALPN is decided at dial time and the request is built before that.
 
-The concrete case is RFC 9218's `priority`. Chrome sends it on **112 of 119** captured HTTP/2
-requests, as the last field, and on **0 of 744** captured HTTP/1.1 requests — 722 over TLS with
-forced ALPN plus 22 to a flag-free `http://localhost` origin. It has no HTTP/1.1 form at all.
-Without this key a request built once and sent over whichever protocol the origin offers either
-loses `priority` on HTTP/2 or invents it on HTTP/1.1.
+The concrete case is RFC 9218's `priority`. Chrome sends it on **128 of 135** captured HTTP/2
+request HEADERS blocks, as the last field, and on **0 of 930** captured HTTP/1.1 requests. It has no
+HTTP/1.1 form at all. Without this key a request built once and sent over whichever protocol the
+origin offers either loses `priority` on HTTP/2 or invents it on HTTP/1.1.
+
+Re-derived, not remembered — see "Ground truth" at the foot of this file for the command, the nine
+captures and the attribution rule. (Revisions up to `v0.6.9-sightglass.14` quoted "112 of 119" and
+"0 of 744" from a Chrome 152 capture that no longer exists on any reachable machine. Those two
+numbers were carried forward for five tags with no way to check them; they are replaced by counts
+taken from the Chrome 153 captures under `groundtruth/out`, which anyone can re-run.)
 
 ```
 header.go        HTTP1OmitKey = "HTTP1-Omit:"; writeSubset drops the named headers, both on the
@@ -801,6 +927,29 @@ name here.
 bytes of `Request.Write`; the magic key itself never reaches the wire; nothing else is dropped;
 case-insensitive in both directions; and it works on the ordered path, which is the one a
 browser-emulating caller actually takes.
+
+### Ablation
+
+Dropping the two omission loops in `Header.writeSubset` — the ordered path and the unordered one —
+so that `HTTP1OmitKey` is still excluded from the wire as a key but no longer omits anything:
+
+```
+$ GOTOOLCHAIN=auto go test . -run TestHTTP1OmitKey -count=1
+--- FAIL: TestHTTP1OmitKeyDropsOnlyOnHTTP1 (0.00s)
+    header_http1omit_test.go:63: priority survived on the HTTP/1.1 wire despite HTTP1OmitKey:
+        GET /x HTTP/1.1
+        Accept: */*
+        Host: example.invalid
+        Priority: u=0, i
+        User-Agent: probe
+--- FAIL: TestHTTP1OmitKeyIsCaseInsensitive (0.00s)
+    header_http1omit_test.go:91: header "Priority" was not dropped by omit name "priority":
+--- FAIL: TestHTTP1OmitKeyWorksWithHeaderOrder (0.00s)
+    header_http1omit_test.go:111: priority survived the ordered path:
+```
+
+The message prints the wire bytes with `Priority:` on them, which is the defect — a header with no
+HTTP/1.1 form, invented on an HTTP/1.1 request — and not merely a mismatch.
 
 ### Verification
 
@@ -875,10 +1024,29 @@ this copy did not, so the defect was one `Transport` choice away from the wire.
 ### Tests
 
 `no_auto_headers_test.go`: with the key, `Request.Write` produces exactly the stated block and no
-`User-Agent`; **without** it the same request grows the injected one (the ablation), so the test
-fails if the gate is removed. The magic key never reaches the wire on either the ordered or the
-unordered path. The HTTP/2 sites are proven end-to-end on a real h2 loopback origin by Sightglass's
+`User-Agent`; the magic key never reaches the wire on either the ordered or the unordered path. The
+HTTP/2 sites are proven end-to-end on a real h2 loopback origin by Sightglass's
 `parity.TestParityCallerStatedBlockIsExactOnH2`.
+
+### Ablation
+
+Removing the gate from the HTTP/1.1 User-Agent site in `request.go` (`uaCap == nil && uaLow == nil`,
+i.e. upstream):
+
+```
+$ GOTOOLCHAIN=auto go test . -run TestNoAutoHeadersKey -count=1
+--- FAIL: TestNoAutoHeadersKeySuppressesTheInjectedUserAgent (0.00s)
+    no_auto_headers_test.go:40: NoAutoHeadersKey did not suppress the injected User-Agent:
+        GET /x HTTP/1.1
+        Host: example.invalid
+        X-One: 1
+        Accept: text/plain
+        User-Agent: Go-http-client/1.1
+```
+
+The failure prints the leak itself: a caller that asked for three headers got four, and the fourth
+names the library. For a caller emitting a byte-exact browser ClientHello that is the loudest
+possible tell.
 
 ### Verification
 
@@ -982,8 +1150,8 @@ Both behaviours are real, and both are measured:
 
 | engine | policy | `:path` | `:method` | evidence |
 |---|---|---|---|---|
-| Chrome 153 | first match | 4 | 2 | 114 `:path` + 8 `:method` observations, two captures, zero exceptions |
-| Firefox 156 | last match | 5 | 3 | 41 of 41 attributed HEADERS blocks; leading byte `0x05` where a first-match encoder emits `0x04`; confirmed independently by the tshark HPACK dissector |
+| Chrome 153 | first match | 4 | 2 | 130 `:path` + 8 `:method` observations, four captures, zero exceptions |
+| Firefox 156 | last match | 5 | 3 | 41 of 41 attributed HEADERS blocks (`:path` index 5 on all 41; `:method` index 3 on both of its 2); leading byte `0x05` where a first-match encoder emits `0x04` |
 
 ### The fix
 
@@ -1048,8 +1216,9 @@ the negation — so it did the opposite of its purpose in both directions:
   never sent.
 
 The first is a wire divergence. Chrome 153 sends exactly one `RST_STREAM` per reset stream — 6
-resets on 6 distinct streams across both ground-truth captures, never two on one stream — and a
-second reset on a stream the peer has already closed is trivially loggable by any origin.
+client RST_STREAM frames on 6 DISTINCT streams across the nine captures, never two on one stream,
+against 125 streams the server ended with END_STREAM — and a second reset on a stream the peer has
+already closed is trivially loggable by any origin.
 
 The race that exposes it: `transportResponseBody.Close()` writes `RST_STREAM(CANCEL)`, sets
 `didReset = true`, writes `WINDOW_UPDATE(0, unread)` to return connection flow control, then forgets
@@ -1064,15 +1233,19 @@ Reproduced in Sightglass at **12 of 200 runs (6.0%)** — five independent attem
 4/40, 3/40, 3/40, 1/40, 1/40 — and more under CPU load. (An earlier revision quoted only the first
 three attempts and called it "~8-10%"; the full five-attempt figure is 6.0% and is the one below.)
 
-The second is a **leak**, and this entry originally got that wrong. It claimed "no stream-map leak
-resulted from the old code — `Close()` calls `forgetStreamID` unconditionally — so the only lost
-behaviour on the other branch was the reset itself." That is true only of the path where the caller
-**closes the response body**. `cc.forgetStreamID` sits inside the very same `if` as the reset, so on
-the path where the caller cancels the request **context** with the body still open — where
-`transportResponseBody.Close()` never runs and `cancelStream()` is the only code that can release
-the stream — the old condition wrote no reset **and** forgot nothing. The `clientStream` stayed in
-`cc.streams` for the life of the connection, holding its accounting and one of the connection's
-concurrency slots.
+**RETRACTED, FALSE — "no stream-map leak resulted from the old code, because `Close()` calls
+`forgetStreamID` unconditionally".** That sentence was published in `v0.6.9-sightglass.9` and `.11`,
+in this entry and in the commit message beside it, and it is FALSE. It holds for exactly one of the
+two paths that can end a stream — `transportResponseBody.Close()` — and the operator who wrote it
+never checked the other one.
+
+`cc.forgetStreamID` sits inside the very same `if` as the reset. So on the CONTEXT-CANCEL path —
+`awaitRequestCancel -> cancelStream()`, where the caller cancels the request with the body still
+open, `transportResponseBody.Close()` never runs, and `cancelStream()` is the only code that can
+release the stream — the inverted condition wrote no `RST_STREAM` **and** called no
+`cc.forgetStreamID`. The `clientStream` stayed in `cc.streams` for the life of the connection,
+holding its accounting and one of the connection's 100 concurrency slots. The one-character fix
+closes the leak as well as the duplicate reset; both branches are restored by the same negation.
 
 Measured through Sightglass's shipped entry point (`parity.TestParityHTTP2CancelledStreamsDoNotConsumeSlots`,
 `NewSessionFactory -> Session.Do`): with the condition inverted, 100 context-cancelled requests on
@@ -1107,13 +1280,15 @@ didReset=false: peer received 0 RST_STREAM, want 1
 didReset=true:  peer received 1 RST_STREAM, want 0
 ```
 
-`TestCancelStreamForgetsTheStream`, added when the "no stream-map leak" claim above was corrected,
-pins the OTHER statement inside the same `if`: it reads `cc.streams` after `cancelStream()` returns
-and before `cc.Close()` (which tears every stream down and would erase the difference). Ablation,
-restoring the inverted condition:
+`TestCancelStreamForgetsTheStream` is the guard the RETRACTED "stream-map leak" sentence above never
+had. It pins the OTHER statement inside the same `if`: it reads `cc.streams` after `cancelStream()`
+returns and before `cc.Close()` (which tears every stream down and would erase the difference).
+Ablation — and note that it is a DIFFERENT ablation from the one that pins the reset: deleting only
+`cc.forgetStreamID(cs.ID)` and leaving `cc.writeStreamReset` in place, so that the frame half of the
+`if` is untouched and only the leak is reintroduced:
 
 ```
-cancel_stream_reset_test.go:159: didReset=false: the clientStream was still in cc.streams after
+cancel_stream_reset_test.go:161: didReset=false: the clientStream was still in cc.streams after
 cancelStream() — cc.forgetStreamID sits inside the same `if` as the reset, so an inverted condition
 leaks one clientStream and one concurrency slot per cancelled request, for the life of the connection
 --- FAIL: TestCancelStreamForgetsTheStream (0.00s)
@@ -1179,9 +1354,10 @@ drains the body.
 fired, and with patch 11 in place that wrong premise became a real `RST_STREAM(CANCEL)` on a stream
 the server had already ended.
 
-Chrome 153 never resets a stream that ended: all 6 of its RST_STREAMs across both Sightglass
-ground-truth captures are on streams it abandoned, and ~94 completed streams carry none. A reset on a
-completed stream is as loggable as the duplicate patch 11 removed.
+Chrome 153 never resets a stream that ended: its 6 RST_STREAM frames across the nine ground-truth
+captures are on 6 distinct streams it abandoned, and the 125 streams the server ended with
+END_STREAM carry none. A reset on a completed stream is as loggable as the duplicate patch 11
+removed.
 
 Measured through Sightglass against a loopback h2 listener, 12 runs of a three-leg scenario
 (bodyless GET, POST with a body, one abandoned body):
@@ -1247,6 +1423,47 @@ two full suites run concurrently on this machine and produces two spurious packa
 
 ---
 
+## Ground truth
+
+Every count in this file about what a browser puts on the wire is RE-DERIVED here, from captures in
+this repository's sibling `groundtruth/out`, and none of it is quoted from memory or from a vendor
+constant (HR-1, HR-3). The numbers that used to sit in this file — "112 of 119", "0 of 744", "114
+`:path`", "2513 observed fields" — came from a Chrome 152 capture that no longer exists on any
+reachable machine, and were carried unchecked through five tags under the claim that no capture was
+reachable. That claim was itself false: `groundtruth/out` is 974 MB of `capture.pcapng` +
+`keys.keylog` + `netlog.json`, nine Chrome 153.0.8010.37 captures and one Firefox 156.0.
+
+```
+command:  python3 groundtruth/tools/derive_hpack_census.py groundtruth/out
+engine:   Chrome 153.0.8010.37   (9 captures; 4 carry HTTP/2 over TLS)
+          Firefox 156.0          (1 capture)
+decoder:  tshark 4.4.8, decrypting with the browser's OWN SSLKEYLOGFILE
+```
+
+**Attribution (HR-3).** The keylog was written by the browser that was under capture, so a TLS
+session that decrypts with it is that browser's. A session tshark cannot decrypt produces no
+`http2.header` field at all, so every observation below is the browser's by construction rather than
+by heuristic — the capture runs on a real NIC and carries every other process on the machine.
+
+| fact | Chrome 153 | Firefox 156 |
+|---|---|---|
+| client HTTP/2 request HEADERS blocks | 135 | 41 |
+| …of those, carrying `priority:` | **128** | 11 |
+| HTTP/1.1 requests observed | 930 | 1 |
+| …of those, carrying `priority` | **0** | 0 |
+| request header fields observed | 2729 | 471 |
+| …emitted "Never Indexed" (`0x1x`) | **0** | 0 |
+| `:path` literal-with-indexed-name | 130, **all name index 4** | 41, **all name index 5** |
+| `:method` literal-with-indexed-name | 8, **all name index 2** | 2, **all name index 3** |
+| `:path` emitted with incremental indexing | **0** | 0 |
+| `:authority` emitted with incremental indexing | 53 | 13 |
+| client `RST_STREAM` frames / distinct streams | **6 / 6** | 0 / 0 |
+| streams the server ended with END_STREAM | 125 | 27 |
+
+Patch 1's HEADERS-priority ground truth is separate and is pinned as JSON rather than prose:
+`go/tlsemu/testdata/chrome152_h2_priority.json`, 12 observations, NetLog HEADERS-priority joined per
+stream with that stream's own `priority:` header.
+
 ## Regression diff
 
 Upstream v0.6.9 is **not green**, so "the suite passes" is not an available bar and this file never
@@ -1257,33 +1474,71 @@ Per-patch entries above quote the diff measured on the day that patch landed, un
 this machine was running; those numbers are not comparable with one another and must not be read as a
 running total. The measurement for the tree as it stands is here, and it is the one to trust.
 
-<!-- REGRESSION-DIFF-BEGIN (regenerated whenever this tree changes; patches_doc_test.go checks the
-     marker is present and that the tag named below is the tag this tree is at) -->
+<!-- REGRESSION-DIFF-BEGIN — patches_doc_test.go checks that this block exists, that it names a tag
+     on both its `before:` and `after:` lines, that the `before:` tag is a real tag and an ancestor of
+     HEAD, and that the `after:` tag either IS this tree or does not exist yet (the tree waiting to be
+     tagged as it). Up to and including v0.6.9-sightglass.14 this comment claimed the tag check and
+     there was none: .14 shipped numbers measured at .12 and .13 under a line reading
+     "after: v0.6.9-sightglass.12, this tree". TestPatchesMDRegressionDiffIsForTHISTree exists so that
+     cannot happen again. -->
 ```
-command: GOTOOLCHAIN=auto go test ./... -count=1 -timeout 25m
-         run on the same machine, one after the other, never concurrently
+command: GOTOOLCHAIN=auto go test ./... -count=1 -timeout 60m
+         same machine, one run after the other, never concurrently
 before:  v0.6.9-sightglass.11 in a clean worktree of the published tag (895d5a8)
-after:   v0.6.9-sightglass.12, this tree
+after:   v0.6.9-sightglass.15, this tree
 
-before:  36 failing tests   root package 654.713s
-after:   36 failing tests   root package 654.340s   (v0.6.9-sightglass.12)
-         35 failing tests   root package  54.758s   (v0.6.9-sightglass.13; the run where the
-                                                     load-dependent TestOmitHTTP2 passed)
-NEW failures: none, in any run
-FIXED:        none by these tags, which change no product code
+before:  36 failing tests   root package 654.622s   (TestOmitHTTP2 FAILED, 601s of that 654s)
+after:   35 failing tests   root package  51.329s   (TestOmitHTTP2 PASSED)
 
-Every set measured on .12 and .13 is .11's set or a subset of it. Packages: fhttp,
-fhttp/http2 and fhttp/httputil FAIL on both sides; cgi, cookiejar, fcgi, http2/h2c,
-http2/hpack, httptest, httptrace, internal, internal/profile and pprof are ok on both.
+NEW failures: none. The `after` set is the `before` set MINUS TestOmitHTTP2; every other failure is
+              the same test on both sides, name for name, diffed with `comm` on the two sorted
+              `--- FAIL` lists rather than by comparing totals.
+FIXED by these tags: none. .12 through .15 change no product code — every change to a non-test .go
+              file since .11 is a comment or a [SIGHTGLASS PATCH n] marker.
 
-Why -timeout 25m and not the default: 601 s of the root package's 654 s is `TestOmitHTTP2`,
-an UPSTREAM test inherited verbatim, which shells out to
-`go test -short -tags=nethttpomithttp2 net/http` and therefore runs the entire standard
-library net/http suite in a subprocess. It fails there on ephemeral-port exhaustion
-(`dial tcp 127.0.0.1:57639: connect: can't assign requested address`). Earlier entries in
-this file that reported "41 failing" with the root package at "601.3s" were reporting this
-test hitting the old 10-minute DEFAULT per-package timeout and killing the package — not a
-hang, and not a larger failure set. With 25m the package completes.
+Packages: fhttp, fhttp/http2 and fhttp/httputil FAIL on both sides; cgi, cookiejar, fcgi,
+http2/h2c, http2/hpack, httptest, httptrace, internal, internal/profile and pprof are ok on
+both. There is no [build failed] and no blanket skip anywhere in either run.
+
+HOW THE `after` COUNT WAS TAKEN, because the guard above is part of the suite it measures. The
+tree was run TWICE. The first run was made with this block still holding .14's numbers, and reported
+36 — 35 plus exactly ONE extra failure, TestPatchesMDRegressionDiffIsForTHISTree, the guard
+immediately above refusing a diff that is not this tree's. The block was then filled with those
+numbers and the whole suite re-run: **35 failing, root package 51.329s, no doc test among them**.
+The numbers above are the SECOND run, so they describe the tree as it actually ships rather than a
+tree with one known-red guard in it.
+
+RETRACTED, FALSE: "not a hang, and not a larger failure set. With 25m the package completes."
+Revisions of this file up to and including v0.6.9-sightglass.14 said that about the root package,
+and it is FALSE. Running the command that sentence prescribes, at .14, in a clean tree, an
+adversarial reader got:
+
+    panic: test timed out after 25m0s
+            running tests:
+                    TestMissingStatusNoPanic (24m8s)
+    FAIL    github.com/Berserk-Automation-Hub/fhttp  1500.328s
+
+It IS a hang, it is NOT TestOmitHTTP2 (which never ran in that run at all), and the "36/35" counts
+that revision published were partial totals truncated by that panic. What actually happens is
+LOAD-DEPENDENT and has three observed outcomes on this machine:
+
+  root package 654.6s, 36 failing  — TestOmitHTTP2 runs its subprocess suite into that
+                                     subprocess's own 10-minute timeout and FAILS. Observed at
+                                     .11 (before, above).
+  root package  55.0s, 35 failing  — TestOmitHTTP2 passes. Observed at .15 (after, above).
+  root package 1500.3s, PANIC      — TestCancelRequestWhenSharingConnection exhausts the ephemeral
+                                     range, and TestMissingStatusNoPanic, which runs next, blocks
+                                     24m8s in `<-done` while its own listener sits in Accept: the
+                                     client's proxy dial never reaches it. Run alone that test
+                                     passes in 0.00s, so it is an INTERACTION, not a broken test.
+                                     Observed at .14.
+
+All three are the same root cause and it is OURS, not the environment: patch 4's detached H1 dial
+spends a full connect and leaves a TIME_WAIT port per cancelled request (see "What it costs,
+measured" under patch 4). It is ledger T0525, open and raised to high, and the 24-minute wedge is
+recorded there — patch 4's socket cost can stall the whole root package, not merely fail two tests.
+Use `-timeout 60m` so that when the wedge happens the package still finishes rather than being
+killed mid-run and reporting a partial count as a total.
 
 AND THE DIFFERENCE AGAINST UPSTREAM IS OURS. Against pristine v0.6.9 run on the same
 toolchain (`GOTOOLCHAIN=go1.27.0`, so the comparison is source and not language version)
@@ -1296,34 +1551,25 @@ is not:
 
   TestCancelRequestWhenSharingConnection — ATTRIBUTED to patch 4 and deterministic:
       6 runs of this tree, 6 failures; 4 runs with patch 4's one expression reverted,
-      4 passes; pristine, pass. See "What it costs, measured" under patch 4 for the
-      mechanism (wantConn.cancel -> putOrCloseIdleConn on a dial that upstream would
-      have torn down, so every cancelled request spends a connect and a TIME_WAIT port).
+      4 passes; pristine, pass. It failed in both runs above (7.03 s at .15).
 
   TestOmitHTTP2 — SUGGESTIVE, not attributed. It shells out to a second full net/http
-      suite and fails on the same ephemeral-port exhaustion. With patch 4 it failed in
-      4 of 6 runs of this tree (601 s each) and passed in 2, including twice when the
-      root package was run on its own at low load (50.7 s and 60.8 s); without patch 4
-      it passed 4 of 4, and pristine passed. Load-dependent, so one reverting run is
-      not proof and this file does not claim one.
+      suite and fails on the same ephemeral-port exhaustion. It failed in the .11 run
+      above and PASSED in the .15 one, on a tree whose product code is identical, which
+      is what "load-dependent" means and why this file attributes it to nothing.
 
-  It is NOT our added tests. Skipping every test in the eight files this fork adds to
+  It is NOT our added tests. Skipping every test in the nine files this fork adds to
       the root package leaves TestOmitHTTP2 at 601.55 s and still failing.
 
-BECAUSE OF THAT, THE COUNT IS NOT STABLE ACROSS RUNS and this file no longer says it is.
-Observed on this tree: 36, 36, 35 — the 35 is the run where TestOmitHTTP2 passed. 34 with
-patch 4 reverted. The invariant that does hold, and the one a regression diff needs, is that
-no run of `.12` or `.13` produced a failure that `.11` did not: every set measured here is
-`.11`'s 36 or a subset of it.
+THE COUNT IS NOT STABLE ACROSS RUNS and this file does not claim it is. Observed on this line of
+history: 36, 36, 35, 35 — the 35s are the runs where TestOmitHTTP2 passed, and 34 with patch 4
+reverted. The invariant a regression diff needs does hold: no run of .12 .. .15 has produced a
+failure that .11 did not.
 
 Two upstream failures this fork FIXES, for the same reason the suite is kept:
 `TestCompressionDeflate` (patch 7 — upstream's own test for raw DEFLATE, which it fails) and
 `TestDescriptions` (patch 4b's `goroutineleak` profile entry — pristine's `pprof` package
 fails; ours is ok).
-
-Measured once with this file's regression block still unfilled, which produced exactly one
-extra failure — `TestPatchesMDCarriesARegressionDiff`, the guard that refuses an unfilled block
-here — and once again with it filled, which is the 36 above.
 ```
 <!-- REGRESSION-DIFF-END -->
 
@@ -1331,20 +1577,20 @@ here — and once again with it filled, which is the 36 above.
 
 ## Maintenance
 
-**The instruction that used to sit here was wrong, and following it would have deleted the suite that
-catches the defects.** Up to and including `v0.6.9-sightglass.11` this section read "re-copy upstream,
-strip tests, re-apply the hunks above (four for patch 1, one for patch 2, three for patch 3, three for
-patch 4, two for patch 5)". Three things about that were false or harmful:
+**RETRACTED, HARMFUL: the instruction that used to sit here.** Up to and including
+`v0.6.9-sightglass.11` this section read "re-copy upstream, strip tests, re-apply the hunks above
+(four for patch 1, one for patch 2, three for patch 3, three for patch 4, two for patch 5)". Three
+separate things about it were FALSE or HARMFUL, and each is RETRACTED here:
 
-* **"strip tests"** — upstream's 73 test files are KEPT and are the reason patch 4b exists. Stripping
-  them is how the CONNECT leak survived patch 4 in the first place.
-* **"re-copy"** — this is a fork with a rewritten module path across 86 files. A copy reverts the
-  rewrite, and the tree then fails to compile against `go/go.mod`.
-* **"the hunks above"** — the section sat in the MIDDLE of the file, so "above" excluded patches 4b,
-  6, 7, 8, 8b and 10: six of the fourteen entries, verified by listing the `## ` headings of the
-  published `v0.6.9-sightglass.11` file (`git show 895d5a8:PATCHES.md`), where `## Maintenance` is
-  at line 609 and those six are the only sections below it. It now sits at the end, and there is no
-  "above" left to get wrong.
+* RETRACTED, HARMFUL — "strip tests". Upstream's 73 test files are KEPT and are the reason patch 4b
+  exists. Stripping them is how the CONNECT leak survived patch 4 in the first place.
+* RETRACTED, HARMFUL — "re-copy upstream". This is a fork with a rewritten module path across 86
+  files. A copy reverts the rewrite, and the tree then fails to compile against `go/go.mod`.
+* RETRACTED, HARMFUL — "re-apply the hunks above". The section sat in the MIDDLE of the file, so
+  "above" excluded patches 4b, 6, 7, 8, 8b and 10: six of the fourteen entries, verified by listing
+  the `## ` headings of the published `v0.6.9-sightglass.11` file (`git show 895d5a8:PATCHES.md`),
+  where `## Maintenance` is at line 609 and those six are the only sections below it. It now sits at
+  the end, and there is no "above" left to get wrong.
 
 ### On an upstream bump
 
@@ -1356,13 +1602,20 @@ patch 4, two for patch 5)". Three things about that were false or harmful:
 3. **Keep every `*_test.go`, `export_test.go` and `testdata/`.** If a merge conflict tempts you to
    drop one, resolve it instead.
 4. Resolve conflicts against the markers, not against this file's prose. Every site of every patch
-   carries a `[SIGHTGLASS PATCH n]` comment; `grep -rn 'SIGHTGLASS PATCH' --include='*.go' .` lists
-   them all, and `patches_doc_test.go` fails if a patch documented here has no marker in the tree, or
-   a marker in the tree has no entry here.
-5. Update the base commit, the file manifest and the counts in this file. `patches_doc_test.go`
-   re-derives all three from `git diff` and fails if you do not.
+   carries a `[SIGHTGLASS PATCH n]` comment — all 24 marked files, including the five upstream files
+   patch 4b edits and the nine guards this fork adds — so
+   `grep -rn 'SIGHTGLASS PATCH' --include='*.go' .` lists them all.
+   `patches_doc_test.go` fails if a patch documented here has no marker in the tree, if a marker in
+   the tree has no entry here, **or if a marker names a patch the "Files touched" manifest does not
+   list beside that same file**. That last one is new in `v0.6.9-sightglass.15` and it is the check
+   this step depends on: before it, the patch-5 marker in `http2/client_conn_pool.go` and the patch-9
+   marker in `http2/transport.go` could be swapped and every guard stayed green, which would send you
+   to the wrong section of this file from the right line of code.
+5. Update the base commit, the file manifest, the per-file patch attribution in it, and the counts.
+   `patches_doc_test.go` re-derives all of them from `git diff` and from the markers, and fails if
+   you do not.
 6. Re-run, in this order:
-   * `GOTOOLCHAIN=auto go test ./... -count=1 -timeout 20m` here, and diff the failure set against the
+   * `GOTOOLCHAIN=auto go test ./... -count=1 -timeout 60m` here, and diff the failure set against the
      same command on the previous tag. NO NEW failures is the bar; green is not.
    * `gofmt -l` over **only the files you touched**. This fork promises a gofmt baseline identical to
      upstream's, and upstream's is not clean — `gofmt -w .` across the tree would produce a diff of

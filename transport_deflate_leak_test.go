@@ -1,5 +1,7 @@
 package http_test
 
+// [SIGHTGLASS PATCH 7] this file is patch 7's fork-local guard.
+
 // A `Content-Encoding: deflate` response must not park persistConn.readLoop forever.
 //
 // DecompressBody runs INSIDE readLoop. The body it is handed is a *bodyEOFSignal whose EOF path does
