@@ -49,7 +49,7 @@ retraction nobody can grep for is not a retraction), and every appearance must s
 conditions: it is QUOTED, not stated; a RETRACTED / FALSE / HARMFUL marker sits within 150 bytes of
 it; and a phrase out of THAT claim's own correction sits within 400. The second and third conditions
 were added in `v0.6.9-sightglass.18` because marker-presence alone was not a guard. Those 3
-markers occur 41 times in this file, so an adversarial reader re-asserted the stream-map
+markers occur 46 times in this file, so an adversarial reader re-asserted the stream-map
 sentence below verbatim in a paragraph whose only nearby marker retracted the BASE VERSION, and
 every doc guard this file carried at `v0.6.9-sightglass.17` — fourteen of them — stayed green.
 Proximity is not association, and a retraction quotes the published sentence rather than asserting
@@ -66,6 +66,11 @@ it.
   `v0.6.9-sightglass.17` said 81 HERE while the front matter above said 82, and the false string was
   additionally hard-coded in `patches_doc_test.go`: a retraction section correcting a false count
   with a false count. Every statement of the count in this file is now swept, not just the first.)
+* **RETRACTED, FALSE** — "So the 35 above is the whole suite with no known-red guard in it", the
+  sentence that explains the regression-diff block's own headline number. It was
+  `v0.6.9-sightglass.19`'s, left verbatim when `.20` rewrote the block above it to say
+  "36 failing tests" on both of its lines and to name a later tag. The correction, and the guard that
+  now reads the digits out of the block and requires the prose to restate them, are in that block.
 * **RETRACTED, HARMFUL** — the `## Maintenance` instruction to "re-copy upstream", and its
   instruction to "strip tests". A re-copy reverts the rewritten module path and the tree stops
   compiling; HARMFUL too, "strip tests" would delete the suite that catches the defects —
@@ -171,7 +176,7 @@ can see the two halves:
 | 8b | `no_auto_headers_test.go` | `parity.TestParityCallerStatedBlockIsExactOnH2` |
 | 9  | `http2/goaway_flush_test.go` | — (the frame is on a connection Sightglass tears down; no parity row observes it) |
 | 10 | `http2/hpack/static_name_index_test.go` | `parity.TestParityStaticNameIndexIsProfileDrivenOnTheShippedPath` |
-| 11 | `http2/cancel_stream_reset_test.go` (`TestCancelStreamResetsOnlyWhenNotAlreadyReset` for the frame, `TestCancelStreamForgetsTheStream` for the slot and `cs.done`, `TestCancelStreamWakesTheSlotWaiter` for `cc.cond.Broadcast()` and the idle-timer re-arm) | `parity.TestParityHTTP2CancelledStreamsDoNotConsumeSlots` — 150 context-cancelled requests on ONE connection through `NewSessionFactory -> Session.Do` |
+| 11 | `http2/cancel_stream_reset_test.go` (`TestCancelStreamResetsOnlyWhenNotAlreadyReset` for the frame, `TestCancelStreamResetsTheRightStreamWithCANCEL` for its stream number and error code, `TestCancelStreamForgetsTheStream` for the slot and `cs.done`, `TestCancelStreamWakesTheSlotWaiter` for `cc.cond.Broadcast()` and the idle-timer re-arm) | `parity.TestParityHTTP2CancelledStreamsDoNotConsumeSlots` — 150 context-cancelled requests on ONE connection through `NewSessionFactory -> Session.Do` |
 | 12 | `http2/await_request_cancel_test.go` | `parity.TestParityHTTP2CancelledStreamsDoNotConsumeSlots`, `parity.TestParityHTTP2WireFrames` |
 | this file | `patches_doc_test.go` | — a document has no shipped path; it is guarded where it lives |
 | sibling pins | — (this fork cannot see `go/go.mod`) | `parity.TestForkGoModsDoNotPinOlderSiblingForks` |
@@ -776,13 +781,18 @@ $ GOTOOLCHAIN=auto go test ./http2/hpack/ -run 'TestIndexingPolicy|TestNilIndexi
         representation, so the encoder is emitting the indexed form no browser emits — the exact
         octet patch 6 exists to fix.
     indexing_policy_test.go:74: the policy changed nothing: both encodings are
-        44 93 60 6b 77 1d 16 95 63 54 b5 47 59 09 1a 4c 45 8b 52 6c f5.
+        44 93 60 6b 77 1d 16 95 63 54 b5 47 59 09 1a 4c 45 8b 52 6c f5. […]
 --- FAIL: TestIndexingPolicyDecidesWhatComesBackAsADynamicIndex/Chrome's:_only_:authority_comes_back_indexed
-    indexing_policy_test.go:117: second request, :path: encoded as bf (indexed=true), want indexed=false.
+    indexing_policy_test.go:117: second request, :path: encoded as bf (indexed=true), want indexed=false. […]
 ```
 
 Both messages name the octet and the dynamic-table consequence, not merely a mismatch, and both go
-green the moment the patch is restored.
+green the moment the patch is restored. The two `[…]` above are where this block STOPS quoting and
+the message goes on — `:74` continues "A per-field indexing hook that the encoder ignores is a seam
+that reports success and ships upstream's bytes", `:117` continues with the cross-request half of the
+rule. The marker is not decoration: `TestPatchesMDQuotedAblationOutputIsReproducible` requires it,
+because a block that shows part of a line and does not say so reads as the whole line, and an
+adversarial reader used exactly that slack to append a sentence `go test` never printed.
 
 ### Coverage, before and after
 
@@ -1317,52 +1327,107 @@ pins the condition and gives the same answer on every run.
 The `if` this patch negates contains TWO statements, and the second one — `cc.forgetStreamID(cs.ID)`
 — is not one effect but four. `forgetStreamID` is `streamByID(id, true)`, which deletes the map
 entry, closes `cs.done`, calls `cc.cond.Broadcast()` and updates `cc.lastActive` /
-`cc.idleTimer.Reset(cc.idleTimeout)` / `cc.lastIdle`. Three guards cover them, and each of the four
-ablations below breaks a different subset:
+`cc.idleTimer.Reset(cc.idleTimeout)` / `cc.lastIdle`. The first statement is not one effect either:
+`cc.writeStreamReset(cs.ID, ErrCodeCancel, nil)` has a stream number and an error code, and a harness
+that counts frames pins neither. Four guards cover all of it, and each of the four ablations below
+breaks a different subset:
 
 | guard | what it pins |
 | --- | --- |
 | `TestCancelStreamResetsOnlyWhenNotAlreadyReset` | the condition: exactly one `RST_STREAM`, and only when not already reset |
+| `TestCancelStreamResetsTheRightStreamWithCANCEL` | the reset's OPERANDS: stream `cs.ID`, code `CANCEL` |
 | `TestCancelStreamForgetsTheStream` | the map entry and `close(cs.done)` |
 | `TestCancelStreamWakesTheSlotWaiter` | `cc.cond.Broadcast()`, `cc.lastActive`, `cc.lastIdle` and the idle-timer re-arm |
 
-**Ablation 1 — restore the inverted condition** (`if didReset`). It fails in **both** directions,
-which is the point, and it takes the bookkeeping down with it:
+`TestCancelStreamResetsTheRightStreamWithCANCEL` is the newest of the four and it was added for a
+demonstrated miss, not for symmetry. An adversarial reader mutated the reset's operands and both
+mutations were GREEN against a harness that read the `*RSTStreamFrame` and threw its fields away:
+`cc.writeStreamReset(cs.ID+2, …)` reset a stream the peer never opened (`ok 4.457s`) and
+`cc.writeStreamReset(cs.ID, ErrCodeInternal, nil)` told the origin the client had malfunctioned
+rather than that the caller had gone (`ok 4.475s`). The sequence this entry publishes above is
+`RST_STREAM(N, CANCEL)`, so N and CANCEL are inside the claim and are now read off the wire: the
+harness records every frame's `StreamID` and `ErrCode` on `cancelOutcome`, and
+`TestCancelStreamResetsTheRightStreamWithCANCEL` asserts both. (No line number is cited for them
+here on purpose — `TestPatchesMDCitesNoLineNumbersIntoThisTree` forbids it in prose, and it caught
+this sentence's first draft.)
 
+**THE FOUR BLOCKS BELOW ARE RE-EXECUTED, NOT TRANSCRIBED.** Each ablation declares the text it
+replaces (the `ABLATION-ANCHOR` block, which must occur exactly once in `http2/transport.go` or every
+record below is about code that has moved) and the text it replaces it with.
+`TestPatchesMDAblationsActuallyReproduce` copies this tree, applies that one mutation, runs the
+command each block prints as its own first line, and requires the block to BE what that run
+printed — the same failing tests in the same order, each with the same error arms in the same order,
+each message equal in full. Two things published at `v0.6.9-sightglass.20` are why it exists: an
+adversarial reader appended `, and the connection was reaped correctly.` to a quoted arm and the
+suite stayed green, and deleted two arms out of the middle of ablation 2's block and the suite stayed
+green. The one thing these blocks omit is the per-run duration on each `--- FAIL:` header —
+`(2.03s)` against `(2.00s)` is not a regression — and the guard REJECTS a block that carries one, so
+the omission cannot be used to put an unchecked number back in.
+
+<!-- ABLATION-ANCHOR file=http2/transport.go run=./http2/ pattern=TestCancelStream -->
+```go
+	if !didReset {
+		cc.writeStreamReset(cs.ID, ErrCodeCancel, nil)
+		cc.forgetStreamID(cs.ID)
+	}
+```
+
+**Ablation 1 — restore the inverted condition** (`if didReset`). It fails in **both** directions,
+which is the point, and it takes the frame's operands and the bookkeeping down with it: eleven error
+arms across all four guards. (`v0.6.9-sightglass.20` and earlier published FOUR of them under an
+unelided `$ go test` prompt, which is the defect this entry retracts `.18` for, recurring two tags
+later in the same entry. It is re-executed now rather than transcribed.)
+
+<!-- ABLATION 1 REPLACEMENT -->
+```go
+	if didReset {
+		cc.writeStreamReset(cs.ID, ErrCodeCancel, nil)
+		cc.forgetStreamID(cs.ID)
+	}
+```
+
+<!-- ABLATION 1 OUTPUT -->
 ```
 $ GOTOOLCHAIN=auto go test ./http2/ -run TestCancelStream -count=1
---- FAIL: TestCancelStreamResetsOnlyWhenNotAlreadyReset (2.03s)
-    cancel_stream_reset_test.go:276: didReset=false: peer received 0 RST_STREAM, want 1 — a cancelled
-    stream that has not been reset must be reset once
-    cancel_stream_reset_test.go:281: didReset=true: peer received 1 RST_STREAM, want 0 — the stream
-    was already reset, so this is the duplicate Chrome never sends (measured 6/6 streams, one reset each)
---- FAIL: TestCancelStreamForgetsTheStream (2.00s)
-    cancel_stream_reset_test.go:306: didReset=false: the clientStream was still in cc.streams after
-    cancelStream() — cc.forgetStreamID sits inside the same `if` as the reset, so an inverted
-    condition leaks one clientStream and one concurrency slot per cancelled request, for the life of
-    the connection
---- FAIL: TestCancelStreamWakesTheSlotWaiter (2.03s)
-    cancel_stream_reset_test.go:347: didReset=false: a goroutine parked in cc.cond.Wait() waiting for a concurrency slot was NEVER WOKEN within 2s after cancelStream() released the stream.
+--- FAIL: TestCancelStreamResetsOnlyWhenNotAlreadyReset
+    cancel_stream_reset_test.go:300: didReset=false: peer received 0 RST_STREAM, want 1 — a cancelled stream that has not been reset must be reset once
+    cancel_stream_reset_test.go:305: didReset=true: peer received 1 RST_STREAM, want 0 — the stream was already reset, so this is the duplicate Chrome never sends (measured 6/6 streams, one reset each)
+--- FAIL: TestCancelStreamResetsTheRightStreamWithCANCEL
+    cancel_stream_reset_test.go:321: didReset=false: peer received 0 RST_STREAM (streams [], codes []), want exactly 1 — the operand assertions below have nothing to read otherwise
+--- FAIL: TestCancelStreamForgetsTheStream
+    cancel_stream_reset_test.go:361: didReset=false: the clientStream was still in cc.streams after cancelStream() — cc.forgetStreamID sits inside the same `if` as the reset, so an inverted condition leaks one clientStream and one concurrency slot per cancelled request, for the life of the connection
+    cancel_stream_reset_test.go:371: didReset=false: cs.done was still OPEN after cancelStream() returned. Releasing the stream means cc.forgetStreamID, which closes cs.done and broadcasts on cc.cond as well as deleting the map entry; anything that only deletes the map entry frees the concurrency slot and leaves checkResetOrDone and awaitFlowControl blocked forever on a stream that is gone. A wake-up leak is the same class of defect as the slot leak patch 11 exists to close.
+--- FAIL: TestCancelStreamWakesTheSlotWaiter
+    cancel_stream_reset_test.go:402: didReset=false: a goroutine parked in cc.cond.Wait() waiting for a concurrency slot was NEVER WOKEN within 2s after cancelStream() released the stream. cc.forgetStreamID ends in cc.cond.Broadcast(), and that broadcast is the ONLY thing that wakes awaitOpenSlotForRequest. Deleting the stream from cc.streams without it frees the slot in the accounting and tells nobody: on a connection saturated at Chrome's 100 concurrent streams, the request already waiting for a slot is never woken when a context-cancelled stream frees one, and that connection is wedged for that request for the rest of its life. That is the same permanent wedge patch 11 exists to close.
+    cancel_stream_reset_test.go:412: didReset=false: cc.lastActive was still the zero time after cancelStream(). cc.forgetStreamID sets it, and ClientConn's idle accounting (tooIdleLocked, http2ClientConnPool reuse, httptrace's GotConn.IdleTime) reads it. A connection whose last activity is recorded as the zero time is indistinguishable from one that was never used.
+    cancel_stream_reset_test.go:419: didReset=false: cc.lastIdle was still the zero time after cancelStream() emptied cc.streams. tooIdleLocked() returns false while lastIdle is zero, so a connection whose last stream was CANCELLED is never judged too idle and is handed to new requests for ever.
+    cancel_stream_reset_test.go:425: didReset=false: cc.idleTimer never fired after cancelStream() emptied cc.streams, although the harness armed it with a 25ms idleTimeout and waited 2s. cc.forgetStreamID calls cc.idleTimer.Reset(cc.idleTimeout) when the last stream goes; without it the connection that just became idle by CANCELLATION never schedules its own reaping and sits in the pool for ever. That is a second leak alongside the slot leak, on the same one-line path.
+    cancel_stream_reset_test.go:437: didReset=true: the goroutine parked in cc.cond.Wait() woke anyway within 2s, with the stream still in cc.streams. cancelStream() releases nothing on this branch, so the wake came from somewhere else and the positive assertion above is measuring ambient noise rather than cc.forgetStreamID's broadcast.
+    cancel_stream_reset_test.go:443: didReset=true: cc.idleTimer fired although cancelStream() released no stream, so the idle-timer assertion above is not measuring cc.forgetStreamID either.
 ```
 
 **Ablation 2 — delete only `cc.forgetStreamID(cs.ID)`,** leaving `cc.writeStreamReset` in place, so
 the frame half of the `if` is untouched and only the leak is reintroduced. This is the ablation the
 RETRACTED "stream-map leak" sentence above never had:
 
+<!-- ABLATION 2 REPLACEMENT -->
+```go
+	if !didReset {
+		cc.writeStreamReset(cs.ID, ErrCodeCancel, nil)
+	}
 ```
---- FAIL: TestCancelStreamForgetsTheStream (2.00s)
-    cancel_stream_reset_test.go:306: didReset=false: the clientStream was still in cc.streams after
-    cancelStream() — cc.forgetStreamID sits inside the same `if` as the reset, so an inverted
-    condition leaks one clientStream and one concurrency slot per cancelled request, for the life of
-    the connection
-    cancel_stream_reset_test.go:316: didReset=false: cs.done was still OPEN after cancelStream()
-    returned. Releasing the stream means cc.forgetStreamID, which closes cs.done and broadcasts on
-    cc.cond as well as deleting the map entry
---- FAIL: TestCancelStreamWakesTheSlotWaiter (4.00s)
-    cancel_stream_reset_test.go:347: didReset=false: a goroutine parked in cc.cond.Wait() waiting for a concurrency slot was NEVER WOKEN within 2s after cancelStream() released the stream.
-    cancel_stream_reset_test.go:357: didReset=false: cc.lastActive was still the zero time after cancelStream().
-    cancel_stream_reset_test.go:364: didReset=false: cc.lastIdle was still the zero time after cancelStream() emptied cc.streams.
-    cancel_stream_reset_test.go:370: didReset=false: cc.idleTimer never fired after cancelStream() emptied cc.streams, although the harness armed it with a 25ms idleTimeout and waited 2s.
+
+<!-- ABLATION 2 OUTPUT -->
+```
+$ GOTOOLCHAIN=auto go test ./http2/ -run TestCancelStream -count=1
+--- FAIL: TestCancelStreamForgetsTheStream
+    cancel_stream_reset_test.go:361: didReset=false: the clientStream was still in cc.streams after cancelStream() — cc.forgetStreamID sits inside the same `if` as the reset, so an inverted condition leaks one clientStream and one concurrency slot per cancelled request, for the life of the connection
+    cancel_stream_reset_test.go:371: didReset=false: cs.done was still OPEN after cancelStream() returned. Releasing the stream means cc.forgetStreamID, which closes cs.done and broadcasts on cc.cond as well as deleting the map entry; anything that only deletes the map entry frees the concurrency slot and leaves checkResetOrDone and awaitFlowControl blocked forever on a stream that is gone. A wake-up leak is the same class of defect as the slot leak patch 11 exists to close.
+--- FAIL: TestCancelStreamWakesTheSlotWaiter
+    cancel_stream_reset_test.go:402: didReset=false: a goroutine parked in cc.cond.Wait() waiting for a concurrency slot was NEVER WOKEN within 2s after cancelStream() released the stream. cc.forgetStreamID ends in cc.cond.Broadcast(), and that broadcast is the ONLY thing that wakes awaitOpenSlotForRequest. Deleting the stream from cc.streams without it frees the slot in the accounting and tells nobody: on a connection saturated at Chrome's 100 concurrent streams, the request already waiting for a slot is never woken when a context-cancelled stream frees one, and that connection is wedged for that request for the rest of its life. That is the same permanent wedge patch 11 exists to close.
+    cancel_stream_reset_test.go:412: didReset=false: cc.lastActive was still the zero time after cancelStream(). cc.forgetStreamID sets it, and ClientConn's idle accounting (tooIdleLocked, http2ClientConnPool reuse, httptrace's GotConn.IdleTime) reads it. A connection whose last activity is recorded as the zero time is indistinguishable from one that was never used.
+    cancel_stream_reset_test.go:419: didReset=false: cc.lastIdle was still the zero time after cancelStream() emptied cc.streams. tooIdleLocked() returns false while lastIdle is zero, so a connection whose last stream was CANCELLED is never judged too idle and is handed to new requests for ever.
+    cancel_stream_reset_test.go:425: didReset=false: cc.idleTimer never fired after cancelStream() emptied cc.streams, although the harness armed it with a 25ms idleTimeout and waited 2s. cc.forgetStreamID calls cc.idleTimer.Reset(cc.idleTimeout) when the last stream goes; without it the connection that just became idle by CANCELLATION never schedules its own reaping and sits in the pool for ever. That is a second leak alongside the slot leak, on the same one-line path.
 ```
 
 **RETRACTED, FALSE — the ablation record this entry published for ablation 2.** It was published as
@@ -1374,12 +1439,13 @@ line 161 really are that `t.Errorf` — and the record went wrong at `.18`, in t
 `cs.done was still OPEN`, that the block never showed. The last published revision of this record is
 therefore the text of a run nobody can reproduce, which is exactly what an ablation record must not
 be. `TestPatchesMDCitesNoLineNumbersIntoThisTree` waved it through because 161 was still *inside*
-the file — its fenced-block exemption doing exactly what its own comment warns about. Two guards
+the file — its fenced-block exemption doing exactly what its own comment warns about. Three guards
 replace that: `TestPatchesMDQuotedAblationOutputIsReproducible` requires every quoted `file.go:NNN:`
-in this document to land on a testing call that really prints the quoted text, and
-`TestPatchesMDTagCitationHistoryIsTrue` reads the tag ranges in THIS paragraph back out of
-`git show <tag>:PATCHES.md`, so a sentence about what an old tag published cannot be written from
-memory.
+in this document to land on a testing call that really prints the quoted text,
+`TestPatchesMDAblationsActuallyReproduce` re-runs each of these four mutations and requires the block
+to be what it prints, and `TestPatchesMDTagCitationHistoryIsTrue` reads the tag ranges in THIS
+paragraph back out of `git show <tag>:PATCHES.md`, so a sentence about what an old tag published
+cannot be written from memory.
 
 **RETRACTED, FALSE — and the retraction above got it wrong in its turn.**
 `v0.6.9-sightglass.19` published this very paragraph saying the record had been printed at line 161
@@ -1392,35 +1458,35 @@ why the check above exists rather than a fifteenth careful reading.
 **Ablation 3 — replace `cc.forgetStreamID(cs.ID)` with `cc.mu.Lock(); delete(cc.streams, cs.ID);
 cc.mu.Unlock()`.** An adversarial reader wrote this: the slot really IS freed, so a map-only guard
 passes and so does the Sightglass parity guard that counts free concurrency slots. Its output is
-ablation 2's MINUS the `:306` arm — five errors, not six — and that missing arm is the whole point:
-`stillInMap` is the one assertion this mutation satisfies, and at `v0.6.9-sightglass.17` it was the
-only assertion there was.
+ablation 2's MINUS the `stillInMap` arm — five errors, not six — and that missing arm is the whole
+point: `stillInMap` is the one assertion this mutation satisfies, and at `v0.6.9-sightglass.17` it
+was the only assertion there was.
 
-```
---- FAIL: TestCancelStreamForgetsTheStream (2.00s)
-    cancel_stream_reset_test.go:316: didReset=false: cs.done was still OPEN after cancelStream()
-    returned. Releasing the stream means cc.forgetStreamID, which closes cs.done and broadcasts on
-    cc.cond as well as deleting the map entry
---- FAIL: TestCancelStreamWakesTheSlotWaiter (4.00s)
-    cancel_stream_reset_test.go:347: didReset=false: a goroutine parked in cc.cond.Wait() waiting for a concurrency slot was NEVER WOKEN within 2s after cancelStream() released the stream.
-    cancel_stream_reset_test.go:357: didReset=false: cc.lastActive was still the zero time after cancelStream().
-    cancel_stream_reset_test.go:364: didReset=false: cc.lastIdle was still the zero time after cancelStream() emptied cc.streams.
-    cancel_stream_reset_test.go:370: didReset=false: cc.idleTimer never fired after cancelStream() emptied cc.streams, although the harness armed it with a 25ms idleTimeout and waited 2s.
-```
-
-**Ablation 4 — replace it with a partial that does MORE**, and still not everything:
-
+<!-- ABLATION 3 REPLACEMENT -->
 ```go
-cc.mu.Lock()
-if cs2 := cc.streams[cs.ID]; cs2 != nil && !cc.closed {
-	delete(cc.streams, cs.ID)
-	close(cs2.done)
-}
-cc.mu.Unlock()
+	if !didReset {
+		cc.writeStreamReset(cs.ID, ErrCodeCancel, nil)
+		cc.mu.Lock()
+		delete(cc.streams, cs.ID)
+		cc.mu.Unlock()
+	}
 ```
 
-This drops exactly three things: `cc.cond.Broadcast()`, `cc.lastActive` and the idle-timer re-arm. It
-passed BOTH layers at `v0.6.9-sightglass.18` — the whole fork `http2` suite and
+<!-- ABLATION 3 OUTPUT -->
+```
+$ GOTOOLCHAIN=auto go test ./http2/ -run TestCancelStream -count=1
+--- FAIL: TestCancelStreamForgetsTheStream
+    cancel_stream_reset_test.go:371: didReset=false: cs.done was still OPEN after cancelStream() returned. Releasing the stream means cc.forgetStreamID, which closes cs.done and broadcasts on cc.cond as well as deleting the map entry; anything that only deletes the map entry frees the concurrency slot and leaves checkResetOrDone and awaitFlowControl blocked forever on a stream that is gone. A wake-up leak is the same class of defect as the slot leak patch 11 exists to close.
+--- FAIL: TestCancelStreamWakesTheSlotWaiter
+    cancel_stream_reset_test.go:402: didReset=false: a goroutine parked in cc.cond.Wait() waiting for a concurrency slot was NEVER WOKEN within 2s after cancelStream() released the stream. cc.forgetStreamID ends in cc.cond.Broadcast(), and that broadcast is the ONLY thing that wakes awaitOpenSlotForRequest. Deleting the stream from cc.streams without it frees the slot in the accounting and tells nobody: on a connection saturated at Chrome's 100 concurrent streams, the request already waiting for a slot is never woken when a context-cancelled stream frees one, and that connection is wedged for that request for the rest of its life. That is the same permanent wedge patch 11 exists to close.
+    cancel_stream_reset_test.go:412: didReset=false: cc.lastActive was still the zero time after cancelStream(). cc.forgetStreamID sets it, and ClientConn's idle accounting (tooIdleLocked, http2ClientConnPool reuse, httptrace's GotConn.IdleTime) reads it. A connection whose last activity is recorded as the zero time is indistinguishable from one that was never used.
+    cancel_stream_reset_test.go:419: didReset=false: cc.lastIdle was still the zero time after cancelStream() emptied cc.streams. tooIdleLocked() returns false while lastIdle is zero, so a connection whose last stream was CANCELLED is never judged too idle and is handed to new requests for ever.
+    cancel_stream_reset_test.go:425: didReset=false: cc.idleTimer never fired after cancelStream() emptied cc.streams, although the harness armed it with a 25ms idleTimeout and waited 2s. cc.forgetStreamID calls cc.idleTimer.Reset(cc.idleTimeout) when the last stream goes; without it the connection that just became idle by CANCELLATION never schedules its own reaping and sits in the pool for ever. That is a second leak alongside the slot leak, on the same one-line path.
+```
+
+**Ablation 4 — replace it with a partial that does MORE**, and still not everything. This drops
+exactly three things: `cc.cond.Broadcast()`, `cc.lastActive` and the idle-timer re-arm. It passed
+BOTH layers at `v0.6.9-sightglass.18` — the whole fork `http2` suite and
 `parity.TestParityHTTP2CancelledStreamsDoNotConsumeSlots` on Sightglass's shipped path — which is
 why `TestCancelStreamWakesTheSlotWaiter` exists. `awaitOpenSlotForRequest` parks in `cc.cond.Wait()`
 and NOTHING but `cc.cond.Broadcast()` wakes it, so a request already waiting for one of Chrome's 100
@@ -1428,18 +1494,45 @@ slots on a saturated connection is never told when a context-cancelled stream fr
 permanent wedge this patch exists to close, reached from the waiter's side. The idle-timer half is a
 second leak — a connection whose last stream was CANCELLED never re-arms its reaping timer.
 
+<!-- ABLATION 4 REPLACEMENT -->
+```go
+	if !didReset {
+		cc.writeStreamReset(cs.ID, ErrCodeCancel, nil)
+		cc.mu.Lock()
+		if cs2 := cc.streams[cs.ID]; cs2 != nil && !cc.closed {
+			delete(cc.streams, cs.ID)
+			close(cs2.done)
+		}
+		cc.mu.Unlock()
+	}
 ```
---- FAIL: TestCancelStreamWakesTheSlotWaiter (4.01s)
-    cancel_stream_reset_test.go:347: didReset=false: a goroutine parked in cc.cond.Wait() waiting for a concurrency slot was NEVER WOKEN within 2s after cancelStream() released the stream. cc.forgetStreamID ends in cc.cond.Broadcast(), and that broadcast is the ONLY thing that wakes awaitOpenSlotForRequest.
-    cancel_stream_reset_test.go:357: didReset=false: cc.lastActive was still the zero time after cancelStream(). cc.forgetStreamID sets it, and ClientConn's idle accounting (tooIdleLocked, http2ClientConnPool reuse, httptrace's GotConn.IdleTime) reads it.
-    cancel_stream_reset_test.go:364: didReset=false: cc.lastIdle was still the zero time after cancelStream() emptied cc.streams. tooIdleLocked() returns false while lastIdle is zero, so a connection whose last stream was CANCELLED is never judged too idle and is handed to new requests for ever.
-    cancel_stream_reset_test.go:370: didReset=false: cc.idleTimer never fired after cancelStream() emptied cc.streams, although the harness armed it with a 25ms idleTimeout and waited 2s.
+
+<!-- ABLATION 4 OUTPUT -->
+```
+$ GOTOOLCHAIN=auto go test ./http2/ -run TestCancelStream -count=1
+--- FAIL: TestCancelStreamWakesTheSlotWaiter
+    cancel_stream_reset_test.go:402: didReset=false: a goroutine parked in cc.cond.Wait() waiting for a concurrency slot was NEVER WOKEN within 2s after cancelStream() released the stream. cc.forgetStreamID ends in cc.cond.Broadcast(), and that broadcast is the ONLY thing that wakes awaitOpenSlotForRequest. Deleting the stream from cc.streams without it frees the slot in the accounting and tells nobody: on a connection saturated at Chrome's 100 concurrent streams, the request already waiting for a slot is never woken when a context-cancelled stream frees one, and that connection is wedged for that request for the rest of its life. That is the same permanent wedge patch 11 exists to close.
+    cancel_stream_reset_test.go:412: didReset=false: cc.lastActive was still the zero time after cancelStream(). cc.forgetStreamID sets it, and ClientConn's idle accounting (tooIdleLocked, http2ClientConnPool reuse, httptrace's GotConn.IdleTime) reads it. A connection whose last activity is recorded as the zero time is indistinguishable from one that was never used.
+    cancel_stream_reset_test.go:419: didReset=false: cc.lastIdle was still the zero time after cancelStream() emptied cc.streams. tooIdleLocked() returns false while lastIdle is zero, so a connection whose last stream was CANCELLED is never judged too idle and is handed to new requests for ever.
+    cancel_stream_reset_test.go:425: didReset=false: cc.idleTimer never fired after cancelStream() emptied cc.streams, although the harness armed it with a 25ms idleTimeout and waited 2s. cc.forgetStreamID calls cc.idleTimer.Reset(cc.idleTimeout) when the last stream goes; without it the connection that just became idle by CANCELLATION never schedules its own reaping and sits in the pool for ever. That is a second leak alongside the slot leak, on the same one-line path.
 ```
 
 `TestCancelStreamWakesTheSlotWaiter` also asserts the NEGATIVE: with `didReset=true` nothing is
 released, so the parked goroutine must STILL be parked when the deadline expires and the idle timer
 must NOT fire. Without that half, a harness that woke its waiter for any reason at all would look
 like a guard — which is how ablations 3 and 4 got through in the first place.
+
+### Coverage, and why it is the wrong instrument here
+
+`go test ./http2/ -run TestCancelStream -cover` reports **6.6% of statements with three guards and
+6.6% with four** — identical, to the decimal. That is not a failure of the fourth guard; it is the
+reason it had to exist. `cc.writeStreamReset(cs.ID, ErrCodeCancel, nil)` was already an executed
+statement under the other three, so every coverage instrument this toolchain has was already
+satisfied while the stream number and the error code it carries were pinned by nothing at all — and
+two mutations of that covered line, `cs.ID+2` and `ErrCodeInternal`, were GREEN. Coverage says a line
+RAN. Only an assertion says it ran with the right operands, which is what patch 6's entry means when
+it reports coverage for a function that had none: the two numbers answer different questions and this
+file quotes whichever one is the evidence.
 
 ### Verification
 
@@ -1668,20 +1761,29 @@ running total. The measurement for the tree as it stands is here, and it is the 
 command: GOTOOLCHAIN=auto go test ./... -count=1 -timeout 60m
          same machine, one run after the other, never concurrently
 before:  v0.6.9-sightglass.18 in a clean worktree of the published tag (2d9f1b6)
-after:   v0.6.9-sightglass.20, this tree
-         (v0.6.9-sightglass.19 is a same-session intermediate, superseded within the hour and
-          skipped deliberately: its PATCHES.md got the RETRACTED paragraph above wrong, which is
-          retracted there and is what TestPatchesMDTagCitationHistoryIsTrue now prevents. The pair
-          below therefore spans everything this session changed, not half of it.)
+after:   v0.6.9-sightglass.21, this tree
+         (v0.6.9-sightglass.19 and .20 are same-session intermediates, each superseded within the
+          hour and skipped deliberately: .19's PATCHES.md got the RETRACTED paragraph above wrong,
+          and .20 left this paragraph's own explanation standing on .19's numbers, which is
+          retracted below. The pair therefore spans everything these sessions changed, not part of
+          it. Every tag from .19 on changes tests and prose only, so the product code on both sides
+          of this pair is identical — `git diff v0.6.9-sightglass.18 HEAD -- '*.go' ':!*_test.go'`
+          is EMPTY, which is checked rather than asserted below.)
 
-before:  36 failing tests   root package 654.326s   whole run 655.56s wall
-after:   36 failing tests   root package 655.518s   whole run 656.66s wall
+before:  36 failing tests   root package 657.129s   whole run 662s wall   11:34:55 - 11:45:57
+after:   36 failing tests   root package 709.874s   whole run 711s wall   11:22:43 - 11:34:34
 
-              This pair was measured in one session, one run after the other, with a 150s gap so
-              the ephemeral port range recovered between them, and nothing else running. The
-              before side was additionally run twice more earlier in the same session (654.018s
-              and 664.423s): all THREE runs of v0.6.9-sightglass.18 produce the IDENTICAL sorted
-              `--- FAIL` list of 36 names, so the baseline is reproducible, not a snapshot.
+              This pair is a FRESH measurement of both sides, not a reuse of an older baseline:
+              the after side ran first, the before side started 21s after it finished, on the same
+              machine with nothing else running, and the clock times above are the two runs. The
+              root package landed in the SAME slow regime on both sides — TestOmitHTTP2 running
+              its subprocess suite into that subprocess's own 10-minute timeout — which is the
+              condition that makes two runs of this package comparable at all. The after side is
+              ~53s longer because this tag adds TestPatchesMDAblationsActuallyReproduce, which
+              re-executes patch 11's four ablations in copies of the tree (54.0s measured alone).
+              Earlier sessions ran v0.6.9-sightglass.18 three further times (654.018s, 654.326s
+              and 664.423s) and every one produced the IDENTICAL sorted `--- FAIL` list of 36
+              names, so the baseline is reproducible across sessions, not a snapshot.
 
 NEW failures: NONE, and this pair says more than "no new ones". The two sorted `--- FAIL` lists
               are IDENTICAL — 36 names on each side, `comm -13` AND `comm -23` both empty — rather
@@ -1719,13 +1821,35 @@ and `grep -c 'build failed'` is 0 on both transcripts. A package whose tests are
 is not a passing package, so that is checked rather than assumed.
 
 HOW THE `after` COUNT WAS TAKEN, because the guard above is part of the suite it measures. This
-tree was run with this block already re-tagged to `before: v0.6.9-sightglass.18` /
-`after: v0.6.9-sightglass.19` and the numeric fields still holding placeholders, and the doc guards
-did not object: TestPatchesMDRegressionDiffIsForTHISTree checks the TAGS, not the numbers, and the
-`after:` line named a tag that did not exist yet, which is the one state in which the file may name
-its own tag before it is cut. So the 35 above is the whole suite with no known-red guard in it, and
-filling in these numbers afterwards changes no test's outcome. (Up to .14 that was not true: the
-block claimed a tag check that did not exist and shipped numbers measured at .12 and .13.)
+tree was run with the `before:` and `after:` lines of this block already carrying the two tags they
+carry now and the numeric fields still holding placeholders. That is the one state in which the doc
+guards permit a file to name its own tag: TestPatchesMDRegressionDiffIsForTHISTree resolves the
+`after:` tag and finds it does not exist yet, which is what a tree waiting to be tagged looks like.
+So the 36 above is the whole suite with no known-red guard in it, and filling in these
+numbers afterwards changes no test's outcome — which is CHECKED rather than asserted. The only
+tests in this tree that read `PATCHES.md` are the ones in `patches_doc_test.go`; after the numbers
+went in, `go test . -run 'TestPatchesMD|TestRetraction|TestSightglassProse|TestForkPins' -count=1`
+is `ok`, so none of them moved from green to red and the `--- FAIL` list above is still this tree's. (Up to .14 that was not true: the block claimed a tag
+check that did not exist and shipped numbers measured at .12 and .13.)
+
+RETRACTED, FALSE — THE PARAGRAPH ABOVE, AS `v0.6.9-sightglass.20` PUBLISHED IT.
+It said "So the 35 above is the whole suite with no known-red guard in it" about a run it published
+twice as "36 failing tests". That sentence was `.19`'s, left verbatim when `.20` rewrote the numbers
+and the tag above it, and it named "`after: v0.6.9-sightglass.19`" as the tag whose run produced
+them while the block itself named `.20`. Both were TRUE at `.19` —
+`git show v0.6.9-sightglass.19:PATCHES.md` has them beside a block whose own lines read 35 and .19 —
+and neither was true at `.20`. A published sentence about a measurement, written from the previous
+revision instead of from the run, is exactly the defect the first RETRACTED paragraph under patch 11
+exists to correct, committed inside the correction of it one tag later.
+`TestPatchesMDRegressionDiffProseRestatesItTruly` reads the digits and the tags out of this block and
+requires every sentence that points back at them to agree. Run against the `.20` text it prints
+'the regression-diff block says "the 35 above", and the numbers it publishes are `before: 36 failing
+tests` and `after: 36 failing tests`' and 'the regression-diff block restates its `after:` side
+inline as "`after: v0.6.9-sightglass.19`", and the `after:` line of the block itself says
+v0.6.9-sightglass.20'. Quoting a retracted wording is how this document records one, so that guard
+skips double-quoted spans and `TestPatchesMDDoesNotRepeatItsRetractedClaims` takes over from there:
+this sentence is the one place the claim may appear, because the marker and its own discriminators
+are beside it.
 
 RETRACTED, FALSE: "not a hang, and not a larger failure set. With 25m the package completes."
 Revisions of this file up to and including v0.6.9-sightglass.14 said that about the root package,
@@ -1741,11 +1865,14 @@ It IS a hang, it is NOT TestOmitHTTP2 (which never ran in that run at all), and 
 that revision published were partial totals truncated by that panic. What actually happens is
 LOAD-DEPENDENT and has three observed outcomes on this machine:
 
-  root package 655-660s, 36 failing — TestOmitHTTP2 runs its subprocess suite into that
-                                     subprocess's own 10-minute timeout and FAILS. Observed twice
-                                     in one session: 655.265s at .11 and 659.742s at .18. Those
-                                     are the two sides of the pair above, and they are what makes
-                                     that pair comparable.
+  root package 655-710s, 36 failing — TestOmitHTTP2 runs its subprocess suite into that
+                                     subprocess's own 10-minute timeout and FAILS. Observed at
+                                     655.265s (.11), 659.742s and 657.129s (.18), and 709.874s
+                                     (this tree). Both sides of the pair above are in this regime,
+                                     and that is what makes that pair comparable. The band was
+                                     published as "655-660s" up to `v0.6.9-sightglass.20`; this
+                                     tag's own run is 709.874s, so the band is re-derived from
+                                     every run recorded here rather than left at the two it had.
   root package ~51-55s, 35 failing — TestOmitHTTP2 PASSES and the package finishes in under a
                                      minute. THE PUBLISHED NUMBER FOR THIS OUTCOME IS RETRACTED,
                                      not the outcome: revisions .15 .. .17 rendered ONE run three

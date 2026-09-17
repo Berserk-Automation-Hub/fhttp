@@ -902,6 +902,15 @@ var retracted = []struct {
 		"HARMFUL. The Maintenance section that said it sat in the MIDDLE of the file, so \"above\" " +
 			"excluded patches 4b, 6, 7, 8, 8b and 10 — six of the fourteen entries.",
 		[]string{"MIDDLE of the file", "six of the fourteen"}},
+	{"the 35 above is the whole suite",
+		"FALSE at v0.6.9-sightglass.20. That sentence was v0.6.9-sightglass.19's, left verbatim when .20 " +
+			"rewrote the numbers and the tag above it: the regression-diff block beside it published the " +
+			"same measurement twice as 36 failing tests and named a different tag as the tree it measured. " +
+			"A published sentence about a measurement, written from the previous revision instead of from " +
+			"the run, is this document's recurring defect. " +
+			"TestPatchesMDRegressionDiffProseRestatesItTruly now reads the digits and the tags out of the " +
+			"block and requires every restatement of them to agree.",
+		[]string{"36 failing tests", "left verbatim"}},
 	{"68 carry nothing but the module-path rewrite",
 		"FALSE. Only 45 of the 73 upstream test files are in the diff against the base at all; the " +
 			"other 28 are byte-identical to upstream, and 45 minus the 5 edited leaves 40 carrying only " +
@@ -1555,87 +1564,132 @@ func TestPatchesMDQuotedAblationOutputIsReproducible(t *testing.T) {
 	doc := patchesDoc(t)
 	prose := stripFencedBlocks(doc)
 	checked := 0
-	for _, m := range docCitationRE.FindAllStringSubmatch(doc, -1) {
-		file, lineStr, msg := m[1], m[2], m[3]
-		if !fileExistsInTree(file) {
-			continue
-		}
-		if strings.Contains(prose, m[0]) {
-			continue // prose, not a fenced block: the other guard bans it outright
-		}
-		n, _ := strconv.Atoi(lineStr)
-		path := resolveInTree(file)
-		b, err := os.ReadFile(path)
-		if err != nil {
-			t.Errorf("PATCHES.md quotes output from %s, which cannot be read: %v", file, err)
-			continue
-		}
-		src := string(b)
-		lines := strings.Split(src, "\n")
-		if n < 1 || n > len(lines) {
-			t.Errorf("PATCHES.md quotes %s:%d, and %s has %d lines. Output quoted from a tree that has "+
-				"since moved is a record of a run nobody can reproduce.", file, n, file, len(lines))
-			continue
-		}
-		checked++
-		if !testCallRE.MatchString(lines[n-1]) {
-			t.Errorf("PATCHES.md quotes test output as coming from %s:%d, but line %d of that file is "+
-				"not a t.Error/t.Fatal/t.Log call:\n  %s\nGo test output names the line of the call that "+
-				"printed it, so this block is output from a different revision of the file.",
-				file, n, n, strings.TrimSpace(lines[n-1]))
-			continue
-		}
-		// The message is compared segment by segment, where the segments are what the source says
-		// literally and the gaps are the printf verbs whose values only exist at run time. The quoted
-		// line may stop early — Go test output wraps and a document quotes what fits — so a segment
-		// the doc never reaches is not a failure; a segment it contradicts is.
-		docNorm := strings.Join(strings.Fields(msg), " ")
-		segs := sourceMessageAt(src, n)
-		if len(segs) == 0 {
-			t.Errorf("PATCHES.md quotes %s:%d, but no message could be read out of the call there.", file, n)
-			continue
-		}
-		// The document may wrap mid-segment — Go test output is long and PATCHES.md is prose — so
-		// the two only have to AGREE as far as the shorter of them goes.
-		if segs[0] != "" && !strings.HasPrefix(docNorm, segs[0]) && !strings.HasPrefix(segs[0], docNorm) {
-			t.Errorf("PATCHES.md publishes this as the output of %s:%d:\n  %s\n"+
-				"but the call at %s:%d starts:\n  %s\n"+
-				"A published ablation record is only worth anything if re-running it produces the text in "+
-				"the document; this is the text of a run nobody can reproduce. PATCHES.md carried "+
-				"`cancel_stream_reset_test.go:161` for two tags after that assertion had moved, and the "+
-				"line-number check waved it through because 161 was still inside the file.",
-				file, n, squash(msg), file, n, squash(segs[0]))
-			continue
-		}
-		agreed, pos := 0, 0
-		if segs[0] != "" {
-			agreed = len(segs[0])
-			if len(docNorm) < agreed {
-				agreed = len(docNorm)
+	for _, blk := range fencedBlocksOf(doc) {
+		for _, arm := range armsIn(blk) {
+			file, n, msg := arm.file, arm.line, arm.msg
+			if !fileExistsInTree(file) {
+				continue
 			}
-			pos = agreed
-		}
-		truncated := false
-		for _, seg := range segs[1:] {
-			if len(seg) < 4 {
-				continue // punctuation between two substituted values proves nothing either way
+			if strings.Contains(prose, file+":"+strconv.Itoa(n)+": ") {
+				continue // prose, not a fenced block: the other guard bans it outright
 			}
-			i := strings.Index(docNorm[pos:], seg)
-			if i < 0 {
-				truncated = true // the quoted line stopped before this segment
-				break
+			path := resolveInTree(file)
+			b, err := os.ReadFile(path)
+			if err != nil {
+				t.Errorf("PATCHES.md quotes output from %s, which cannot be read: %v", file, err)
+				continue
 			}
-			pos += i + len(seg)
-			agreed += len(seg)
-		}
-		// Twenty literal characters is enough on its own. Below that the message is mostly
-		// substituted values — `d.search(%v) = %v, %v; want %v, %v` has nine — and the check is that
-		// EVERY literal fragment the quoted line was long enough to reach is present, in order.
-		if agreed < 20 && (truncated || agreed < 6) {
-			t.Errorf("PATCHES.md publishes this as the output of %s:%d:\n  %s\n"+
-				"and only %d characters of it are literal text the message at %s:%d contains:\n  %v\n"+
-				"Quote enough of the output for it to be checkable against the guard that prints it.",
-				file, n, squash(msg), agreed, file, n, segs)
+			src := string(b)
+			lines := strings.Split(src, "\n")
+			if n < 1 || n > len(lines) {
+				t.Errorf("PATCHES.md quotes %s:%d, and %s has %d lines. Output quoted from a tree that has "+
+					"since moved is a record of a run nobody can reproduce.", file, n, file, len(lines))
+				continue
+			}
+			checked++
+			if !testCallRE.MatchString(lines[n-1]) {
+				t.Errorf("PATCHES.md quotes test output as coming from %s:%d, but line %d of that file is "+
+					"not a t.Error/t.Fatal/t.Log call:\n  %s\nGo test output names the line of the call that "+
+					"printed it, so this block is output from a different revision of the file.",
+					file, n, n, strings.TrimSpace(lines[n-1]))
+				continue
+			}
+			// The message is compared segment by segment, where the segments are what the source says
+			// literally and the gaps are the printf verbs whose values only exist at run time.
+			docNorm, elided := splitElision(strings.Join(strings.Fields(msg), " "))
+			segs := sourceMessageAt(src, n)
+			if len(segs) == 0 {
+				t.Errorf("PATCHES.md quotes %s:%d, but no message could be read out of the call there.", file, n)
+				continue
+			}
+			if segs[0] != "" && !strings.HasPrefix(docNorm, segs[0]) && !strings.HasPrefix(segs[0], docNorm) {
+				t.Errorf("PATCHES.md publishes this as the output of %s:%d (PATCHES.md line %d):\n  %s\n"+
+					"but the call at %s:%d starts:\n  %s\n"+
+					"A published ablation record is only worth anything if re-running it produces the text in "+
+					"the document; this is the text of a run nobody can reproduce. PATCHES.md carried "+
+					"`cancel_stream_reset_test.go:161` for two tags after that assertion had moved, and the "+
+					"line-number check waved it through because 161 was still inside the file.",
+					file, n, arm.docLine, squash(msg), file, n, squash(segs[0]))
+				continue
+			}
+			agreed, pos := 0, 0
+			if segs[0] != "" {
+				agreed = len(segs[0])
+				if len(docNorm) < agreed {
+					agreed = len(docNorm)
+				}
+				pos = agreed
+			}
+			// Short segments are ANCHORS even though a miss on one proves nothing: the previous walk
+			// skipped them outright, so `:path name index = 5, want 4 (leading byte 0x15)` looked as
+			// though it stopped four characters early and the closing `)` of its own message read as
+			// text nothing had printed.
+			truncated, unmatched := false, ""
+			for _, seg := range segs[1:] {
+				if seg == "" {
+					continue // a verb at the very end of the message
+				}
+				i := strings.Index(docNorm[pos:], seg)
+				if i < 0 {
+					if len(seg) < 4 {
+						continue // punctuation between two substituted values proves nothing either way
+					}
+					truncated, unmatched = true, seg // the quoted line stopped before this segment
+					break
+				}
+				pos += i + len(seg)
+				if len(seg) >= 4 {
+					agreed += len(seg)
+				}
+			}
+			tail := strings.TrimSpace(docNorm[pos:])
+			// (E1). Whatever the document prints after the last literal text the source accounts for
+			// has to BE something the source prints. Until this existed, the walk BROKE at the first
+			// segment it could not find and then asked only whether `agreed` was large enough — which
+			// it always was, from the first two segments — so any continuation at all was accepted.
+			switch {
+			case truncated:
+				if bad := reconcileTail(tail, unmatched); len(bad) > 0 {
+					t.Errorf("PATCHES.md publishes this as the output of %s:%d (PATCHES.md line %d):\n  %s\n"+
+						"It agrees with the call there for %d literal characters and then prints\n  %s\n"+
+						"in which %v appear(s) nowhere in the rest of that message, which goes on\n  %s\n"+
+						"A record of a run has to be what the run printed: text appended past the point the "+
+						"quote stops is fabricated, and `go test` cannot have printed it.",
+						file, n, arm.docLine, squash(msg), agreed, squash(tail), bad, squash(unmatched))
+					continue
+				}
+				if !elided {
+					t.Errorf("PATCHES.md quotes %s:%d (PATCHES.md line %d) and stops before the message does:\n"+
+						"  %s\nwhile the call goes on to print\n  %s\n"+
+						"A block that shows part of a line and does not say so reads as the whole line. End the "+
+						"quote with an explicit elision marker (%s) or quote it in full.",
+						file, n, arm.docLine, squash(msg), squash(unmatched), "[...]")
+					continue
+				}
+			case tail != "":
+				// Every literal segment was found and the document still has text left over. That is
+				// legitimate only when the message ENDS in a verb, and then the leftover is that
+				// verb's value — text invented at run time, which this guard cannot check against the
+				// source and does not pretend to. Patch 11's four blocks are checked against a live
+				// run instead, by TestPatchesMDAblationsActuallyReproduce.
+				if segs[len(segs)-1] != "" && !elided {
+					t.Errorf("PATCHES.md publishes this as the output of %s:%d (PATCHES.md line %d):\n  %s\n"+
+						"The call there prints every literal word of that up to\n  %s\n"+
+						"and then ENDS. The document continues with\n  %s\n"+
+						"which no run of this guard can have produced.",
+						file, n, arm.docLine, squash(msg), squash(segs[len(segs)-1]), squash(tail))
+					continue
+				}
+			}
+			// Twenty literal characters is enough on its own. Below that the message is mostly
+			// substituted values — `d.search(%v) = %v, %v; want %v, %v` has nine — and the check is that
+			// EVERY literal fragment the quoted line was long enough to reach is present, in order.
+			if agreed < 20 && (truncated || agreed < 6) {
+				t.Errorf("PATCHES.md publishes this as the output of %s:%d (PATCHES.md line %d):\n  %s\n"+
+					"and only %d characters of it are literal text the message at %s:%d contains:\n  %v\n"+
+					"Quote enough of the output for it to be checkable against the guard that prints it.",
+					file, n, arm.docLine, squash(msg), agreed, file, n, segs)
+			}
 		}
 	}
 	if checked == 0 {
@@ -2133,4 +2187,705 @@ func TestPatchesMDRegressionDiffIsForTHISTree(t *testing.T) {
 			"The numbers in the block were measured somewhere else, and nothing said so — which is how .14 "+
 			"shipped a diff measured at .12.", tags["after"], strings.TrimSpace(string(out))[:12], headSHA[:12])
 	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+// ABLATION RECORDS THAT ARE RE-EXECUTED RATHER THAN READ
+//
+// Everything above this line checks a published ablation block against the SOURCE of the guard that
+// printed it. That is necessary and it is not sufficient, and an adversarial reader proved both
+// halves of the insufficiency against `v0.6.9-sightglass.20`:
+//
+//	(E1) append fabricated text past the last literal segment the quote reaches and it stays green.
+//	     `…and waited 2s.` became `…and waited 2s, and the connection was reaped correctly.` and
+//	     `go test . -run TestPatchesMD` was `ok 2.756s`. The reader stopped at the first newline, so
+//	     it never saw most of a wrapped quote at all, and the segment walk simply BROKE at the first
+//	     segment it could not find and then tested nothing about what followed it.
+//	(E2) delete two error arms from a published fenced block and nothing notices: every check was
+//	     per-`file.go:NNN:`-line and none had any notion of a block being COMPLETE. That is exactly
+//	     the defect this document retracts `.18` for — "`.18` had added a second error arm … that the
+//	     block never showed" — so the correction shipped without the guard that stops it recurring,
+//	     and it HAD recurred: ablation 1 published four of the ten arms its mutation produces.
+//
+// The answer to both is to stop reading and start running. The document declares the mutation each
+// ablation performs, as literal text; this guard applies it to a copy of the tree, runs the command
+// the block publishes as its own prompt line, and requires the block to be what that run prints —
+// every `--- FAIL` name and every arm, in order, with each message compared in full.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+// fencedBlock is one ``` … ``` block of PATCHES.md, with the HTML comment that immediately precedes
+// it (its machine-readable directive, when it has one) and its body lines.
+type fencedBlock struct {
+	directive string   // the `<!-- … -->` comment directly above the fence, or ""
+	info      string   // the fence's info string: "go", "" and so on
+	lines     []string // body lines, the fences themselves excluded
+	startLine int      // 1-based line number of the opening fence in PATCHES.md
+}
+
+var fenceRE = regexp.MustCompile("^\\s*```(.*)$")
+
+var htmlCommentRE = regexp.MustCompile(`(?s)<!--(.*?)-->`)
+
+// fencedBlocksOf splits a document into its fenced blocks. A fence's directive is the HTML comment
+// that ends in the run of lines immediately above it, so a block can carry machine-readable
+// instructions without those instructions being rendered to a reader.
+func fencedBlocksOf(doc string) []fencedBlock {
+	lines := strings.Split(doc, "\n")
+	var out []fencedBlock
+	for i := 0; i < len(lines); i++ {
+		m := fenceRE.FindStringSubmatch(lines[i])
+		if m == nil {
+			continue
+		}
+		blk := fencedBlock{info: strings.TrimSpace(m[1]), startLine: i + 1}
+		for j := i - 1; j >= 0 && j >= i-6; j-- {
+			if strings.TrimSpace(lines[j]) == "" {
+				continue
+			}
+			if strings.HasSuffix(strings.TrimSpace(lines[j]), "-->") {
+				k := j
+				for k >= 0 && !strings.Contains(lines[k], "<!--") {
+					k--
+				}
+				if k >= 0 {
+					if cm := htmlCommentRE.FindStringSubmatch(strings.Join(lines[k:j+1], " ")); cm != nil {
+						blk.directive = strings.Join(strings.Fields(cm[1]), " ")
+					}
+				}
+			}
+			break
+		}
+		i++
+		for i < len(lines) && !fenceRE.MatchString(lines[i]) {
+			blk.lines = append(blk.lines, lines[i])
+			i++
+		}
+		out = append(out, blk)
+	}
+	return out
+}
+
+// citationStartRE matches the first line of one quoted `file.go:NNN: message` record.
+var citationStartRE = regexp.MustCompile(`^\s*([A-Za-z0-9_./]+\.go):(\d+): (.*)$`)
+
+// outputFrameRE matches the lines of `go test` output that are NOT part of a message: the result
+// banners, the RUN/FAIL headers, and the shell prompt a block uses to say what produced it. A
+// quote's continuation lines are everything between it and the next one of these.
+var outputFrameRE = regexp.MustCompile(`^\s*(---\s+(FAIL|PASS|SKIP)|===\s+(RUN|CONT|PAUSE)|ok\s|FAIL\b|PASS\b|\$\s|panic:|#\s|goroutine\s|\[build failed)`)
+
+// failHeaderRE matches a `--- FAIL: TestName` header, with or without a per-run duration.
+var failHeaderRE = regexp.MustCompile(`^\s*---\s+FAIL:\s+([A-Za-z0-9_/]+)\s*(\([0-9.]+s\))?\s*$`)
+
+// quotedArm is one published error arm: the file and line Go test named, the whole message the
+// document shows for it with its continuation lines joined back on, and the `--- FAIL:` header it
+// sits under.
+type quotedArm struct {
+	file     string
+	line     int
+	msg      string
+	failName string
+	docLine  int // 1-based line of PATCHES.md where the arm starts
+}
+
+// armsIn reads the error arms out of one fenced block, joining each quote's continuation lines.
+//
+// Reading only as far as the first newline is how (E1) survived: a quote the document wraps over
+// three lines was compared to the end of its FIRST line, and the other two could say anything.
+func armsIn(blk fencedBlock) []quotedArm {
+	var out []quotedArm
+	fail, cur := "", -1
+	for i, ln := range blk.lines {
+		if h := failHeaderRE.FindStringSubmatch(ln); h != nil {
+			fail, cur = h[1], -1
+			continue
+		}
+		if m := citationStartRE.FindStringSubmatch(ln); m != nil {
+			n, _ := strconv.Atoi(m[2])
+			out = append(out, quotedArm{file: m[1], line: n, msg: m[3], failName: fail,
+				docLine: blk.startLine + 1 + i})
+			cur = len(out) - 1
+			continue
+		}
+		if outputFrameRE.MatchString(ln) || strings.TrimSpace(ln) == "" {
+			cur = -1
+			continue
+		}
+		if cur >= 0 {
+			out[cur].msg += " " + strings.TrimSpace(ln)
+		}
+	}
+	return out
+}
+
+// elisionMarkers are the ways this document may say "the quote stops here and the real message goes
+// on". Anything else after the last text the source accounts for is text no run produced.
+var elisionMarkers = []string{"[…]", "[...]", "…"}
+
+// splitElision removes a trailing elision marker and reports whether there was one.
+func splitElision(s string) (string, bool) {
+	s = strings.TrimSpace(s)
+	for _, mk := range elisionMarkers {
+		if strings.HasSuffix(s, mk) {
+			return strings.TrimSpace(strings.TrimSuffix(s, mk)), true
+		}
+	}
+	return s, false
+}
+
+// wordRE matches a run of four or more letters — long enough to be prose rather than a hex pair, a
+// duration or a number.
+var wordRE = regexp.MustCompile(`[A-Za-z]{4,}`)
+
+// reconcileTail decides whether the text a quote prints AFTER the last literal segment it agreed
+// with can be what the test actually printed there.
+//
+// Where a quote stops, one of two things is on the wire: the value of the printf verb that sits at
+// that point (arbitrary text, invented at run time and nowhere in the source), or the beginning of
+// the literal the message goes on with. So the tail is split — the longest suffix of it that really
+// does begin `next` is taken as literal, and if there is none, the leading whitespace-free token is
+// taken as the substituted value. Whatever is left over has to be accounted for by `next`, because
+// the run had nothing else to print. THAT is what (E1) violated: appending
+// `, and the connection was reaped correctly.` to `…and waited 2s.` leaves `reaped` and `correctly`,
+// two words the message does not contain anywhere after that point.
+//
+// What it cannot decide, and says so rather than pretending: a trailing `%v`/`%s` whose value really
+// is a sentence. That case is decided by TestPatchesMDAblationsActuallyReproduce, which compares
+// against what a run printed instead of against what the source says it would.
+func reconcileTail(tail, next string) []string {
+	tail = strings.TrimSpace(tail)
+	if tail == "" {
+		return nil
+	}
+	rest := ""
+	for k := 0; k+4 <= len(tail); k++ {
+		if strings.HasPrefix(next, tail[k:]) {
+			rest = tail[k:]
+			break
+		}
+	}
+	if rest == "" {
+		if i := strings.IndexByte(tail, ' '); i >= 0 {
+			rest = tail[i+1:]
+		}
+	}
+	lower := strings.ToLower(next)
+	var leftover []string
+	for _, w := range wordRE.FindAllString(rest, -1) {
+		if !strings.Contains(lower, strings.ToLower(w)) {
+			leftover = append(leftover, w)
+		}
+	}
+	return unique(leftover)
+}
+
+// ablationAnchorRE reads the directive that names the ONE place in the tree every ablation of this
+// patch mutates, and the command that measures it.
+var ablationAnchorRE = regexp.MustCompile(`ABLATION-ANCHOR file=(\S+) run=(\S+) pattern=(\S+)`)
+
+// ablationPartRE reads `ABLATION <n> REPLACEMENT` / `ABLATION <n> OUTPUT`.
+var ablationPartRE = regexp.MustCompile(`^ABLATION (\d+) (REPLACEMENT|OUTPUT)$`)
+
+type ablation struct {
+	n           int
+	replacement string
+	output      fencedBlock
+}
+
+// copyTreeForAblation copies the working tree into dst, skipping .git. The ablation runs against a
+// COPY so that a guard which mutates product code can never leave the repository mutated — the one
+// property an ablation harness must have, since the failure mode is a half-reverted tree that ships.
+func copyTreeForAblation(t *testing.T, dst string) {
+	t.Helper()
+	err := filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			if info.Name() == ".git" {
+				return filepath.SkipDir
+			}
+			return os.MkdirAll(filepath.Join(dst, path), 0o755)
+		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(dst, path), b, info.Mode().Perm())
+	})
+	if err != nil {
+		t.Fatalf("copying the tree for an ablation: %v", err)
+	}
+}
+
+// runOutput is a parsed `go test` transcript: the failing tests in the order they were reported, and
+// each one's error arms in the order they were printed.
+type runOutput struct {
+	order []string
+	arms  map[string][]quotedArm
+}
+
+func parseRunOutput(text string) runOutput {
+	out := runOutput{arms: map[string][]quotedArm{}}
+	for _, a := range armsIn(fencedBlock{lines: strings.Split(text, "\n")}) {
+		if _, seen := out.arms[a.failName]; !seen {
+			out.order = append(out.order, a.failName)
+		}
+		out.arms[a.failName] = append(out.arms[a.failName], a)
+	}
+	return out
+}
+
+func norm(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+// TestPatchesMDAblationsActuallyReproduce is the guard the phrase "a published ablation record is
+// only worth anything if re-running it produces the text in the document" has been asserting since
+// `v0.6.9-sightglass.15` without anything behind it.
+//
+// It takes each ablation's declared mutation, applies it to a copy of this tree, runs the command
+// the block prints as its own prompt line, and requires the block to BE that run's output: the same
+// failing tests in the same order, each with the same error arms in the same order, each arm's
+// message equal in full (or a prefix of it ending in an explicit elision marker).
+//
+// It closes (E1) and (E2) together. Text appended past where a quote stops is not what the run
+// printed, so it is red; an arm deleted from a block is an arm the run produced and the block does
+// not show, so that is red too. Per-run DURATIONS are the one thing the blocks omit — `(2.03s)`
+// against `(2.00s)` is not a regression — and the parser rejects a block that carries one, so the
+// omission cannot be used to smuggle an unmeasured number back in.
+func TestPatchesMDAblationsActuallyReproduce(t *testing.T) {
+	doc := patchesDoc(t)
+	blocks := fencedBlocksOf(doc)
+
+	var anchorFile, runPkg, runPattern, anchorText string
+	abl := map[int]*ablation{}
+	for _, blk := range blocks {
+		if m := ablationAnchorRE.FindStringSubmatch(blk.directive); m != nil {
+			anchorFile, runPkg, runPattern = m[1], m[2], m[3]
+			anchorText = strings.Join(blk.lines, "\n") + "\n"
+			continue
+		}
+		m := ablationPartRE.FindStringSubmatch(blk.directive)
+		if m == nil {
+			continue
+		}
+		n, _ := strconv.Atoi(m[1])
+		if abl[n] == nil {
+			abl[n] = &ablation{n: n}
+		}
+		if m[2] == "REPLACEMENT" {
+			abl[n].replacement = strings.Join(blk.lines, "\n") + "\n"
+		} else {
+			abl[n].output = blk
+		}
+	}
+	if anchorText == "" {
+		t.Fatal("PATCHES.md carries no `<!-- ABLATION-ANCHOR file=… run=… pattern=… -->` block. The " +
+			"ablation records in this document are its evidence, and without the anchor none of them can " +
+			"be re-executed — which is the state in which `.18` published a block that showed four of " +
+			"the ten error arms its mutation produces and nothing noticed for two tags.")
+	}
+	if len(abl) == 0 {
+		t.Fatal("PATCHES.md declares an ABLATION-ANCHOR and not one ABLATION n REPLACEMENT block to " +
+			"apply to it.")
+	}
+
+	src, err := os.ReadFile(anchorFile)
+	if err != nil {
+		t.Fatalf("the ABLATION-ANCHOR names %s, which cannot be read: %v", anchorFile, err)
+	}
+	if got := strings.Count(string(src), anchorText); got != 1 {
+		t.Fatalf("the ABLATION-ANCHOR block occurs %d times in %s, want exactly 1. The anchor is the "+
+			"shipped code every ablation below mutates: if it no longer appears verbatim, the patch has "+
+			"moved and every block below this line is a record of code that is no longer here.\n"+
+			"anchor:\n%s", got, anchorFile, anchorText)
+	}
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skipf("the ablations are re-executed with `go test`, and go is not on PATH here: %v. Every "+
+			"other check in this file still ran; this one needs a toolchain.", err)
+	}
+
+	ns := make([]int, 0, len(abl))
+	for n := range abl {
+		ns = append(ns, n)
+	}
+	sort.Ints(ns)
+	for _, n := range ns {
+		a := abl[n]
+		t.Run("ablation"+strconv.Itoa(n), func(t *testing.T) {
+			if a.replacement == "" || len(a.output.lines) == 0 {
+				t.Fatalf("ablation %d declares only one of its two blocks. It needs both an "+
+					"`ABLATION %d REPLACEMENT` (what the tree is mutated to) and an `ABLATION %d OUTPUT` "+
+					"(what that mutation prints).", n, n, n)
+			}
+			wantCmd := "$ GOTOOLCHAIN=auto go test " + runPkg + " -run " + runPattern + " -count=1"
+			if got := strings.TrimSpace(a.output.lines[0]); got != wantCmd {
+				t.Fatalf("ablation %d's output block opens with\n  %s\nand the ABLATION-ANCHOR says the "+
+					"command is\n  %s\nA block has to name the command that produced it, and it has to be "+
+					"the command this guard runs, or the two are records of different things.", n, got, wantCmd)
+			}
+			for _, ln := range a.output.lines {
+				if m := failHeaderRE.FindStringSubmatch(ln); m != nil && m[2] != "" {
+					t.Errorf("ablation %d's block publishes a per-run duration: %q. Durations are not "+
+						"reproducible and this block is checked against a live run, so they are omitted "+
+						"deliberately rather than quoted and left unchecked.", n, strings.TrimSpace(ln))
+				}
+			}
+
+			dir := t.TempDir()
+			copyTreeForAblation(t, dir)
+			target := filepath.Join(dir, anchorFile)
+			b, err := os.ReadFile(target)
+			if err != nil {
+				t.Fatalf("reading the copied %s: %v", anchorFile, err)
+			}
+			mutated := strings.Replace(string(b), anchorText, a.replacement, 1)
+			if mutated == string(b) {
+				t.Fatalf("ablation %d changed nothing: its REPLACEMENT block is the anchor verbatim.", n)
+			}
+			if err := os.WriteFile(target, []byte(mutated), 0o644); err != nil {
+				t.Fatalf("writing the mutated %s: %v", anchorFile, err)
+			}
+
+			cmd := exec.Command("go", "test", runPkg, "-run", runPattern, "-count=1", "-timeout", "600s")
+			cmd.Dir = dir
+			cmd.Env = append(os.Environ(), "GOWORK=off", "GOFLAGS=", "GOTOOLCHAIN=auto")
+			raw, _ := cmd.CombinedOutput()
+			got := parseRunOutput(string(raw))
+			if len(got.order) == 0 {
+				t.Fatalf("ablation %d was applied and the suite did not go red. An ablation that leaves "+
+					"the guard green is an UNGUARDED element, whatever the document says about it.\n"+
+					"mutation:\n%s\noutput:\n%s", n, a.replacement, string(raw))
+			}
+			want := parseRunOutput(strings.Join(a.output.lines, "\n"))
+
+			if strings.Join(want.order, ",") != strings.Join(got.order, ",") {
+				t.Fatalf("ablation %d publishes these failing tests:\n  %v\nand re-running it fails:\n  %v\n"+
+					"A block that shows some of the tests a mutation breaks reads as all of them. This is "+
+					"the defect this document retracts `.18` for, one layer up.\nfull output:\n%s",
+					n, want.order, got.order, string(raw))
+			}
+			for _, name := range got.order {
+				w, g := want.arms[name], got.arms[name]
+				if len(w) != len(g) {
+					var wl, gl []string
+					for _, a := range w {
+						wl = append(wl, a.file+":"+strconv.Itoa(a.line))
+					}
+					for _, a := range g {
+						gl = append(gl, a.file+":"+strconv.Itoa(a.line))
+					}
+					t.Errorf("ablation %d publishes %d error arm(s) under %s — %v — and re-running it "+
+						"prints %d — %v. An arm the run produces and the block does not show is a record "+
+						"of a run nobody can reproduce; that is precisely what `.18` shipped and what this "+
+						"block existed to correct.", n, len(w), name, wl, len(g), gl)
+					continue
+				}
+				for i := range w {
+					if w[i].file != g[i].file || w[i].line != g[i].line {
+						t.Errorf("ablation %d, %s, arm %d: the block says %s:%d and the run printed %s:%d.",
+							n, name, i+1, w[i].file, w[i].line, g[i].file, g[i].line)
+						continue
+					}
+					wm, elided := splitElision(norm(w[i].msg))
+					gm := norm(g[i].msg)
+					if wm == gm {
+						continue
+					}
+					if elided && strings.HasPrefix(gm, wm) {
+						continue
+					}
+					k := 0
+					for k < len(wm) && k < len(gm) && wm[k] == gm[k] {
+						k++
+					}
+					t.Errorf("ablation %d, %s, %s:%d — the block and the run agree for %d characters and "+
+						"then diverge.\nblock: …%s\nrun:   …%s\nThese are ablation RECORDS. Either they are "+
+						"what the command prints or they are prose about a run that did not happen.",
+						n, name, w[i].file, w[i].line, k, squash(cut(wm, k)), squash(cut(gm, k)))
+				}
+			}
+		})
+	}
+}
+
+// funcAtLine returns the name of the `func …` whose body contains line n of src, or "".
+func funcAtLine(src string, n int) string {
+	lines := strings.Split(src, "\n")
+	if n < 1 || n > len(lines) {
+		return ""
+	}
+	re := regexp.MustCompile(`^func (?:\([^)]*\) )?([A-Za-z0-9_]+)\(`)
+	for i := n - 1; i >= 0; i-- {
+		if m := re.FindStringSubmatch(lines[i]); m != nil {
+			return m[1]
+		}
+	}
+	return ""
+}
+
+// TestPatchesMDFencedBlocksShowEveryInteriorArm is (E2)'s general answer, for every block in this
+// file rather than only the ones that carry an ABLATION directive.
+//
+// An ablation block is a RECORD of a run, so it is complete or it is misleading — and deleting two
+// arms out of the middle of one was undetectable at `v0.6.9-sightglass.20`, which is the same defect
+// this document retracts `.18` for. Re-executing a block decides it outright, and the four blocks of
+// patch 11 are re-executed by TestPatchesMDAblationsActuallyReproduce. The others cannot be: their
+// mutations are not declared, and running each of them costs a build.
+//
+// What IS decidable for all of them is the INTERIOR. When a block shows arms from one test function
+// at lines L1 < … < Lk, every testing call in that same function BETWEEN L1 and Lk either fired or
+// did not; a block that shows the outer two and skips one in the middle is asserting the middle one
+// stayed green, and that assertion is exactly what a deleted arm forges. So the interior must be
+// complete. The ends cannot be decided this way — an arm dropped from the START or the END of a
+// group leaves nothing behind to notice it — and saying so is better than implying otherwise.
+func TestPatchesMDFencedBlocksShowEveryInteriorArm(t *testing.T) {
+	doc := patchesDoc(t)
+	checked := 0
+	for _, blk := range fencedBlocksOf(doc) {
+		groups := map[string][]quotedArm{}
+		for _, a := range armsIn(blk) {
+			if !fileExistsInTree(a.file) {
+				continue
+			}
+			groups[a.failName+"\x00"+a.file] = append(groups[a.failName+"\x00"+a.file], a)
+		}
+		for key, arms := range groups {
+			if len(arms) < 2 {
+				continue
+			}
+			file := key[strings.IndexByte(key, 0)+1:]
+			b, err := os.ReadFile(resolveInTree(file))
+			if err != nil {
+				continue
+			}
+			src := string(b)
+			lines := strings.Split(src, "\n")
+			lo, hi := arms[0].line, arms[0].line
+			shown := map[int]bool{}
+			for _, a := range arms {
+				shown[a.line] = true
+				if a.line < lo {
+					lo = a.line
+				}
+				if a.line > hi {
+					hi = a.line
+				}
+			}
+			fn := funcAtLine(src, lo)
+			if fn == "" || fn != funcAtLine(src, hi) {
+				continue // the arms span functions; "interior" is not defined across them
+			}
+			checked++
+			var missing []string
+			for n := lo + 1; n < hi; n++ {
+				if shown[n] || n > len(lines) {
+					continue
+				}
+				if !testCallRE.MatchString(lines[n-1]) {
+					continue
+				}
+				if funcAtLine(src, n) != fn {
+					continue
+				}
+				missing = append(missing, file+":"+strconv.Itoa(n)+": "+squash(strings.TrimSpace(lines[n-1])))
+			}
+			if len(missing) > 0 {
+				t.Errorf("the fenced block at PATCHES.md line %d shows arms from %s at lines %d..%d of %s "+
+					"and skips %d testing call(s) between them:\n  %s\n"+
+					"A block that shows the outer arms of a run and not the inner ones states that the "+
+					"inner ones stayed green. `.18` published a block with an arm missing and this "+
+					"document retracts it for that; the guard has to be here, not only in the prose.",
+					blk.startLine, fn, lo, hi, file, len(missing), strings.Join(missing, "\n  "))
+			}
+		}
+	}
+	if checked == 0 {
+		t.Error("no fenced block in PATCHES.md shows two or more error arms from one test function, so " +
+			"this guard checked nothing. The ablation records are the evidence this document rests on.")
+	}
+}
+
+// diffCountRE reads the two measured totals out of the regression-diff block.
+var diffCountRE = regexp.MustCompile(`(?m)^(before|after):\s+(\d+) failing tests`)
+
+// diffDeicticCountRE matches a sentence that points BACK at those totals — "the 35 above" — which is
+// the form in which a stale one survives a rewrite of the numbers it refers to.
+var diffDeicticCountRE = regexp.MustCompile(`\bthe (\d+) (above|below)\b`)
+
+// diffRegimeRE matches the "reports 35, not 36" shape, whose second number is the block's own.
+var diffRegimeRE = regexp.MustCompile(`\breports (\d+), not (\d+)\b`)
+
+// diffInlineTagRE matches a backticked restatement of one of the block's two sides.
+var diffInlineTagRE = regexp.MustCompile("`(before|after): (v[0-9][A-Za-z0-9.\\-]*)`")
+
+// TestPatchesMDRegressionDiffProseRestatesItTruly is this item's own defect, one layer up and one
+// tag later, turned into a check.
+//
+// `v0.6.9-sightglass.20` rewrote the regression-diff block's numbers and its `after:` tag and left
+// the paragraph that EXPLAINS them exactly as `.19` had written it: the block said
+// `after: v0.6.9-sightglass.20` and `36 failing tests` twice, and the paragraph below it said the
+// run had been taken with the block "re-tagged to … `after: v0.6.9-sightglass.19`" and that "the 35
+// above is the whole suite". Both sentences were true at `.19` and neither was true at `.20`. That
+// is a published sentence about a measurement, written from the previous revision instead of from
+// the run — which is the same defect as the "no stream-map leak" sentence this whole entry exists to
+// correct, committed inside the correction of it.
+//
+// TestPatchesMDRegressionDiffIsForTHISTree already pins the TAGS on the before:/after: lines against
+// git. This pins the prose against the block: a restatement that points back at the block's own
+// numbers or tags has to agree with them.
+func TestPatchesMDRegressionDiffProseRestatesItTruly(t *testing.T) {
+	doc := patchesDoc(t)
+	i, j := strings.Index(doc, "REGRESSION-DIFF-BEGIN"), strings.Index(doc, "REGRESSION-DIFF-END")
+	if i < 0 || j < 0 {
+		t.Fatal("PATCHES.md has lost its machine-findable regression-diff block")
+	}
+	blk := doc[i:j]
+
+	counts := map[string]string{}
+	for _, m := range diffCountRE.FindAllStringSubmatch(blk, -1) {
+		if prev, ok := counts[m[1]]; ok && prev != m[2] {
+			t.Errorf("the regression-diff block states `%s:` as %s failing tests in one place and %s in "+
+				"another. One measurement cannot have two values.", m[1], prev, m[2])
+		}
+		counts[m[1]] = m[2]
+	}
+	for _, side := range []string{"before", "after"} {
+		if counts[side] == "" {
+			t.Fatalf("the regression-diff block has no `%s:  N failing tests` line. The headline number "+
+				"is what every sentence around it restates, and it has to be readable by machine.", side)
+		}
+	}
+	tags := map[string]string{}
+	for _, m := range diffTagRE.FindAllStringSubmatch(blk, -1) {
+		if _, ok := tags[m[1]]; !ok {
+			tags[m[1]] = m[2]
+		}
+	}
+
+	ok := map[string]bool{counts["before"]: true, counts["after"]: true}
+	// Paragraph by paragraph, and skipping anything inside double quotes. This block RETRACTS its own
+	// earlier wordings by quoting them, exactly as the rest of the document does, and a quotation of a
+	// sentence that was false is a record rather than a restatement — `quotedAt` is the same test
+	// TestPatchesMDDoesNotRepeatItsRetractedClaims uses, and the same discipline governs it: a quoted
+	// claim still has to sit beside a RETRACTED marker and its own discriminator.
+	for _, para := range paragraphsOf(blk) {
+		for _, loc := range diffDeicticCountRE.FindAllStringSubmatchIndex(para, -1) {
+			if quotedAt(para, loc[0], loc[1]-loc[0]) {
+				continue
+			}
+			if got := para[loc[2]:loc[3]]; !ok[got] {
+				t.Errorf("the regression-diff block says %q, and the numbers it publishes are `before: %s "+
+					"failing tests` and `after: %s failing tests`. A sentence that points back at this "+
+					"block's own headline number has to state this block's own headline number — at `.20` "+
+					"that sentence said 35 about a measurement the block published twice as 36, because "+
+					"the numbers were rewritten and the paragraph explaining them was not.",
+					para[loc[0]:loc[1]], counts["before"], counts["after"])
+			}
+		}
+		for _, loc := range diffRegimeRE.FindAllStringSubmatchIndex(para, -1) {
+			if quotedAt(para, loc[0], loc[1]-loc[0]) {
+				continue
+			}
+			if got := para[loc[4]:loc[5]]; !ok[got] {
+				t.Errorf("the regression-diff block says %q, contrasting a different regime with THIS "+
+					"run's total — and this run's totals are %s and %s.",
+					para[loc[0]:loc[1]], counts["before"], counts["after"])
+			}
+		}
+		for _, loc := range diffInlineTagRE.FindAllStringSubmatchIndex(para, -1) {
+			if quotedAt(para, loc[0], loc[1]-loc[0]) {
+				continue
+			}
+			side, tag := para[loc[2]:loc[3]], para[loc[4]:loc[5]]
+			if tags[side] != "" && tag != tags[side] {
+				t.Errorf("the regression-diff block restates its `%s:` side inline as `%s: %s`, and the "+
+					"`%s:` line of the block itself says %s. A paragraph that names the tag a measurement "+
+					"was taken at has to name the tag the measurement was taken at.",
+					side, side, tag, side, tags[side])
+			}
+		}
+	}
+}
+
+// TestPatchesMDGuardTableEnumeratesEveryTestInOurOwnFiles closes the last hole an adversarial reader
+// found in the guard table: dropping `TestCancelStreamWakesTheSlotWaiter` from patch 11's row left
+// every doc guard green, because the table was checked for names that EXIST and never for names that
+// are MISSING.
+//
+// The rule is scoped to what the fork owns. Rows that name an upstream test file cite one test out
+// of dozens on purpose — `http2/hpack/encode_test.go` has a suite of its own — so completeness there
+// would be noise. Rows that name a file this fork ADDED are different: that file exists only to
+// guard the patch in that row, so if the row enumerates any test from it, it is claiming to
+// enumerate the guards, and a guard left out of that list is a guard a later reader will not know to
+// keep. A row that names the file and no test at all makes no such claim and is left alone.
+func TestPatchesMDGuardTableEnumeratesEveryTestInOurOwnFiles(t *testing.T) {
+	doc := patchesDoc(t)
+	added, _, _ := docManifest(t, doc)
+	sec := section(t, doc, "## Where each patch is guarded")
+	checked := 0
+	for _, row := range guardRowRE.FindAllStringSubmatchIndex(sec, -1) {
+		line := sec[row[0]:]
+		if k := strings.IndexByte(line, '\n'); k >= 0 {
+			line = line[:k]
+		}
+		named := map[string]bool{}
+		for _, n := range goTestNameRE.FindAllString(line, -1) {
+			named[n] = true
+		}
+		if len(named) == 0 {
+			continue
+		}
+		for _, m := range goPathRE.FindAllStringSubmatch(line, -1) {
+			path := m[1]
+			if !added[path] || !strings.HasSuffix(path, "_test.go") {
+				continue
+			}
+			b, err := os.ReadFile(path)
+			if err != nil {
+				continue
+			}
+			var have, missing []string
+			for _, f := range regexp.MustCompile(`(?m)^func (Test[A-Za-z0-9_]+)\(`).
+				FindAllStringSubmatch(string(b), -1) {
+				have = append(have, f[1])
+				if !named[f[1]] {
+					missing = append(missing, f[1])
+				}
+			}
+			mine := false
+			for _, h := range have {
+				if named[h] {
+					mine = true
+					break
+				}
+			}
+			if !mine {
+				continue // the row names the file but no test in it: it claims no enumeration
+			}
+			checked++
+			if len(missing) > 0 {
+				t.Errorf("the guard table's row for patch %s enumerates the tests in `%s`, which this fork "+
+					"ADDED, and leaves out %v. That file holds %d test(s) and the row names %d. An "+
+					"enumeration with a hole in it is how `TestCancelStreamWakesTheSlotWaiter` — the guard "+
+					"for cc.cond.Broadcast() and the idle-timer re-arm — could be deleted from this table "+
+					"with every doc guard staying green.",
+					sec[row[2]:row[3]], path, missing, len(have), len(have)-len(missing))
+			}
+		}
+	}
+	if checked == 0 {
+		t.Error("no row of the guard table enumerates the tests of a file this fork added, so this guard " +
+			"checked nothing.")
+	}
+}
+
+// cut returns what is left of s from k, so a mismatch report starts at the divergence instead of at
+// the beginning of a message both sides share four lines of.
+func cut(s string, k int) string {
+	if k > len(s) {
+		k = len(s)
+	}
+	return s[k:]
 }

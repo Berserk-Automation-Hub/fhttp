@@ -31,6 +31,10 @@ import (
 // where no wake is owed and the harness is proving a NEGATIVE.
 const waiterWakeDeadline = 2 * time.Second
 
+// cancelHarnessStreamID is the stream the harness plants in cc.streams and cancels. It is named
+// rather than written twice so the RST_STREAM assertions can say which stream they expected.
+const cancelHarnessStreamID uint32 = 1
+
 // cancelOutcome is everything cancelStream() owes the connection, observed after it returns.
 //
 // FOUR EFFECTS, NOT ONE. `cc.forgetStreamID(cs.ID)` is a call to `cc.streamByID(id, true)`, and that
@@ -67,6 +71,17 @@ type cancelOutcome struct {
 	stillInMap bool // was the clientStream still in cc.streams when cancelStream() returned
 	doneClosed bool // was cs.done closed by then
 
+	// resetStreams / resetCodes are the IDENTITY of every RST_STREAM the peer received, in order.
+	//
+	// Counting frames is not enough. `cc.writeStreamReset(cs.ID, ErrCodeCancel, nil)` has three
+	// operands and a count pins only the fact that it ran: an adversarial reader reset the WRONG
+	// stream (`cs.ID+2`) and sent the WRONG code (`ErrCodeInternal`), and both mutations were green
+	// against a harness that read the frame and threw its fields away. PATCHES.md publishes the
+	// measured Chrome sequence as `RST_STREAM(N, CANCEL)`, so the stream number and the error code
+	// are inside this patch's claim about the wire and have to be read off the wire.
+	resetStreams []uint32
+	resetCodes   []ErrCode
+
 	// wokeCondWaiter: a goroutine parked in cc.cond.Wait() until len(cc.streams) == 0 was released
 	// while the connection was still OPEN, i.e. by cancelStream()'s own broadcast.
 	wokeCondWaiter bool
@@ -95,11 +110,16 @@ func countResetsAfterCancel(t *testing.T, didReset bool) cancelOutcome {
 	}
 	defer func() { _ = ln.Close() }()
 
-	resets := make(chan int, 1)
+	type seen struct {
+		n       int
+		streams []uint32
+		codes   []ErrCode
+	}
+	resets := make(chan seen, 1)
 	go func() {
 		srv, aerr := ln.Accept()
 		if aerr != nil {
-			resets <- -1
+			resets <- seen{n: -1}
 			return
 		}
 		defer func() { _ = srv.Close() }()
@@ -109,21 +129,23 @@ func countResetsAfterCancel(t *testing.T, didReset bool) cancelOutcome {
 		// framer for everything after it.
 		pre := make([]byte, len(clientPreface))
 		if _, rerr := readFull(srv, pre); rerr != nil {
-			resets <- -1
+			resets <- seen{n: -1}
 			return
 		}
 		fr := NewFramer(srv, srv)
-		n := 0
+		got := seen{}
 		for {
 			f, ferr := fr.ReadFrame()
 			if ferr != nil {
 				break // deadline or EOF: we have seen everything the client sent
 			}
-			if _, ok := f.(*RSTStreamFrame); ok {
-				n++
+			if rf, ok := f.(*RSTStreamFrame); ok {
+				got.n++
+				got.streams = append(got.streams, rf.StreamID)
+				got.codes = append(got.codes, rf.ErrCode)
 			}
 		}
-		resets <- n
+		resets <- got
 	}()
 
 	cli, err := net.Dial("tcp", ln.Addr().String())
@@ -150,7 +172,7 @@ func countResetsAfterCancel(t *testing.T, didReset bool) cancelOutcome {
 	idleTimer := time.AfterFunc(10*time.Minute, func() { fireOnce.Do(func() { close(idleFired) }) })
 	defer idleTimer.Stop()
 
-	cs := &clientStream{cc: cc, ID: 1, done: make(chan struct{})}
+	cs := &clientStream{cc: cc, ID: cancelHarnessStreamID, done: make(chan struct{})}
 	cc.mu.Lock()
 	if cc.streams == nil {
 		cc.streams = make(map[uint32]*clientStream)
@@ -246,11 +268,13 @@ func countResetsAfterCancel(t *testing.T, didReset bool) cancelOutcome {
 		}
 	}
 	select {
-	case n := <-resets:
-		if n < 0 {
+	case got := <-resets:
+		if got.n < 0 {
 			t.Fatal("server side failed")
 		}
-		out.resets = n
+		out.resets = got.n
+		out.resetStreams = got.streams
+		out.resetCodes = got.codes
 		return out
 	case <-time.After(10 * time.Second):
 		t.Fatal("server never reported")
@@ -280,6 +304,37 @@ func TestCancelStreamResetsOnlyWhenNotAlreadyReset(t *testing.T) {
 	if got := countResetsAfterCancel(t, true); got.resets != 0 {
 		t.Errorf("didReset=true: peer received %d RST_STREAM, want 0 — the stream was already reset, "+
 			"so this is the duplicate Chrome never sends (measured 6/6 streams, one reset each)", got.resets)
+	}
+}
+
+// TestCancelStreamResetsTheRightStreamWithCANCEL pins the OPERANDS of the reset, not its arrival.
+//
+// `cc.writeStreamReset(cs.ID, ErrCodeCancel, nil)` carries a stream number and an error code, and a
+// harness that counts frames pins neither. Both were mutated by an adversarial reader and both were
+// green: `cs.ID+2` reset a stream the peer never opened, and `ErrCodeInternal` told the origin the
+// client had failed rather than that the caller had cancelled. PATCHES.md publishes the sequence
+// measured against Chrome 153 as `RST_STREAM(N, CANCEL)` on the SAME stream N that the
+// WINDOW_UPDATE brackets, so N and CANCEL are part of what this patch claims about the wire.
+func TestCancelStreamResetsTheRightStreamWithCANCEL(t *testing.T) {
+	got := countResetsAfterCancel(t, false)
+	if len(got.resetStreams) != 1 || len(got.resetCodes) != 1 {
+		t.Fatalf("didReset=false: peer received %d RST_STREAM (streams %v, codes %v), want exactly 1 — "+
+			"the operand assertions below have nothing to read otherwise",
+			got.resets, got.resetStreams, got.resetCodes)
+	}
+	if got.resetStreams[0] != cancelHarnessStreamID {
+		t.Errorf("didReset=false: the RST_STREAM the peer received was for stream %d, want %d. "+
+			"cancelStream() must reset the stream it was called on: a reset carrying any other stream "+
+			"number leaves the cancelled stream open on the origin AND resets a stream the client never "+
+			"cancelled, and the frame count is identical either way.",
+			got.resetStreams[0], cancelHarnessStreamID)
+	}
+	if got.resetCodes[0] != ErrCodeCancel {
+		t.Errorf("didReset=false: the RST_STREAM the peer received carried error code %v, want %v. "+
+			"PATCHES.md publishes the Chrome 153 sequence as RST_STREAM(N, CANCEL); CANCEL says the "+
+			"caller went away, and any other code — INTERNAL_ERROR above all — tells the origin the "+
+			"client malfunctioned, which is a wire divergence a frame count cannot see.",
+			got.resetCodes[0], ErrCodeCancel)
 	}
 }
 
