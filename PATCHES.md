@@ -444,6 +444,19 @@ $ go test ./parity/ -run TestParityNoAbandonedH1Dials -v
 --- PASS: TestParityNoAbandonedH1Dials (0.86s)
 ```
 
+### What it costs, measured
+
+Keeping a dial upstream would have dropped means holding a local socket upstream would have released.
+That is not free, and this fork's own suite is where it shows: `TestOmitHTTP2` and
+`TestCancelRequestWhenSharingConnection` are the ONLY two tests this fork fails that pristine v0.6.9
+passes on the same toolchain, and reverting this one expression makes both pass and takes the root
+package from 654 s to 57 s. Both fail with `connect: can't assign requested address` — ephemeral-port
+exhaustion — while a second full `net/http` suite runs in a subprocess beside them. The numbers and
+the method are in "Regression diff" at the foot of this file; the open question of whether a bound
+belongs here is ledger **T0525**. The product side is bounded by `MaxConnsPerHost` and is covered by
+`sightglass.TestStressNoLeaks`, which returns goroutines and fds to baseline; the suite is the
+extreme case, not the shipped one.
+
 **Ablation (the guard is falsifiable, not self-fulfilling).** With the detach reverted to upstream
 (`context.WithCancel(ctx)`), the same committed guard fails:
 
@@ -1236,16 +1249,45 @@ The two failing sets are IDENTICAL, test for test. Packages: fhttp, fhttp/http2 
 fhttp/httputil FAIL on both sides; cgi, cookiejar, fcgi, http2/h2c, http2/hpack, httptest,
 httptrace, internal, internal/profile and pprof are ok on both sides.
 
-Why -timeout 25m and not the default: 601s of the root package's 654s is `TestOmitHTTP2`,
+Why -timeout 25m and not the default: 601 s of the root package's 654 s is `TestOmitHTTP2`,
 an UPSTREAM test inherited verbatim, which shells out to
 `go test -short -tags=nethttpomithttp2 net/http` and therefore runs the entire standard
-library net/http suite in a subprocess. On this machine that subprocess then fails on
-ephemeral-port exhaustion (`dial tcp 127.0.0.1:57639: connect: can't assign requested
-address`), which is a property of opening that many listeners back to back, not of anything
-this fork patches; it skips under -short. Earlier entries in this file that reported "41
-failing" with the root package at "601.3s" were reporting this test hitting the old
-10-minute DEFAULT per-package timeout and killing the package — not a hang, and not a
-larger failure set. With 25m the package completes and the count is stable across runs.
+library net/http suite in a subprocess. It fails there on ephemeral-port exhaustion
+(`dial tcp 127.0.0.1:57639: connect: can't assign requested address`). Earlier entries in
+this file that reported "41 failing" with the root package at "601.3s" were reporting this
+test hitting the old 10-minute DEFAULT per-package timeout and killing the package — not a
+hang, and not a larger failure set. With 25m the package completes and the count is stable
+across runs.
+
+AND IT IS OURS. Against pristine v0.6.9 run on the same toolchain
+(`GOTOOLCHAIN=go1.27.0`, so the comparison is source and not language version) this fork
+fails exactly two tests upstream does not — `TestOmitHTTP2` and
+`TestCancelRequestWhenSharingConnection` — and both are **patch 4**. Measured by reverting
+patch 4's one expression, `context.WithCancel(context.WithoutCancel(ctx))` back to
+`context.WithCancel(ctx)`, and running the same command:
+
+    fork v0.6.9-sightglass.12                 36 failing   root package 654.3 s
+    the same tree minus patch 4's WithoutCancel  34 failing   root package  56.8 s
+    pristine v0.6.9 @ GOTOOLCHAIN=go1.27.0    36 failing   root package  60.1 s
+
+and the two that disappear are precisely those two. It is not our added tests: skipping
+every test in the eight files this fork adds to the root package leaves `TestOmitHTTP2` at
+601.55 s and still failing. Run on its own in this tree it passes in 2.9 s, so the trigger
+is the rest of the package running beside it.
+
+The mechanism follows from what patch 4 is FOR. Upstream tears down the dial that loses the
+idle-vs-dial race; this fork lets it run to completion and join the pool, which is the whole
+point — 0 abandoned handshakes at the origin instead of 11 214, and 3x throughput. The cost
+is that we hold local sockets upstream would have dropped, and a package run that opens tens
+of thousands of connections while a second full net/http suite runs in a subprocess beside it
+exhausts the ephemeral port range. That is a real consequence of a shipped patch, recorded
+here rather than filed under "environment", and tracked as ledger T0525. What it is NOT is a
+new failure in this tag: `.11` and `.12` fail the same 36, identically.
+
+Two upstream failures this fork FIXES, for the same reason the suite is kept:
+`TestCompressionDeflate` (patch 7 — upstream's own test for raw DEFLATE, which it fails) and
+`TestDescriptions` (patch 4b's `goroutineleak` profile entry — pristine's `pprof` package
+fails; ours is ok).
 
 Measured once with this file's regression block still unfilled, which produced exactly one
 extra failure — `TestPatchesMDCarriesARegressionDiff`, the guard that refuses an unfilled block
